@@ -1,0 +1,7 @@
+{
+  "name": "fallback-app",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": { "start": "node server.js" },
+  "dependencies": { "express": "^4.19.0", "sqlite3": "^5.1.7" }
+}
