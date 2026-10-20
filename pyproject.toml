@@ -1,0 +1,21 @@
+[project]
+name = "liarapilot"
+version = "0.1.0"
+description = "AI agent that helps programmers deploy their finished projects to Liara"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi==0.150.0",
+    "uvicorn==0.54.0",
+    "langgraph==1.2.16",
+    "openai==3.35.1",
+    "httpx==0.28.1",
+    "pyyaml==6.0.3",
+    "python-multipart==0.0.32",
+]
+
+[project.optional-dependencies]
+dev = ["pytest==9.1.1"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

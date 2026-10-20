@@ -1,0 +1,82 @@
+# LiaraPilot deterministic configuration.
+# Rule (AGENTS.md): never invent prices, limits or API behavior.
+# VERIFIED facts carry source URL + checked date. Everything else stays UNVERIFIED.
+
+limits:
+  max_upload_mb: 25
+  max_files: 4000            # max entries in an uploaded zip
+  max_total_extract_mb: 120  # uncompressed size cap
+  fix_attempts_max: 3        # agent self-fix loop cap (enforced in code)
+
+llm:
+  max_tokens_per_run: 60000  # approximate per-run budget, enforced in code (T11)
+  request_timeout_s: 30
+
+deploy:
+  timeout_s: 600
+  verify_timeout_s: 10
+  verify_path: "/"
+
+security:
+  # SDKs known/expected to depend on their original vendor environment.
+  vendor_sdk_packages:
+    - z-ai-web-dev-sdk
+  secret_key_patterns:
+    - password
+    - passwd
+    - secret
+    - token
+    - api_key
+    - apikey
+    - admin_password
+  # Values that look like placeholders and are NOT flagged as hardcoded secrets.
+  placeholder_value_prefixes: ["changeme", "change-me", "your-", "example", "xxx", "todo", "insert-", "<", "${", "rep"]
+  secret_min_value_len: 6
+
+demo:
+  # DEMO_MODE=1 (env) forces FakeLLM + MockDeployer regardless of other settings.
+  mock_failures: [bad_port, missing_env_var]   # canned MockDeployer failure sequence
+  mock_port: 8080
+  mock_env_var: DATABASE_URL
+
+verified_facts:
+  - id: cli_deploy_flags
+    fact: >-
+      liara deploy accepts --api-token, --path, --platform, -a/--app, -p/--port,
+      --detach, --no-app-logs, --build-arg, --no-cache, -b iran|germany,
+      --team-id, --liara-json
+    source: "https://docs.liara.ir/references/cli/deploy-app/"
+    checked: "2026-10-20"
+  - id: node_sqlite_needs_disk
+    fact: >-
+      SQLite on Liara Node.js apps requires creating a disk and mounting it via
+      liara.json; official example uses the raw sqlite3 module, not Prisma
+    source: "https://docs.liara.ir/paas/nodejs/how-tos/connect-to-db/sqlite/"
+    checked: "2026-10-20"
+  - id: prisma_guide_is_postgres
+    fact: "Official Liara Prisma guide uses PostgreSQL only"
+    source: "https://docs.liara.ir/paas/nodejs/how-tos/connect-to-db/prisma/"
+    checked: "2026-10-20"
+  - id: no_official_nextjs_guide
+    fact: >-
+      No official Next.js guide listed under Liara Node platform docs
+      (Nuxt, Remix, Nitro, NestJS guides exist)
+    source: "https://docs.liara.ir/paas/nodejs/getting-started/"
+    checked: "2026-10-20"
+
+unverified_facts:
+  - id: pricing
+    fact: "All Liara plan/disk/egress prices"
+    status: UNVERIFIED
+  - id: deployer_http_api
+    fact: "Whether a documented Liara HTTP API can replace the CLI from Python"
+    status: UNVERIFIED
+  - id: prisma_sqlite_on_liara
+    fact: "Whether Prisma+SQLite works reliably on a mounted disk on Liara"
+    status: UNVERIFIED
+  - id: cli_exit_codes
+    fact: "liara deploy exit codes and machine-readable output for failure parsing"
+    status: UNVERIFIED
+  - id: cli_log_access
+    fact: "How to fetch application logs non-interactively after --detach deploy"
+    status: UNVERIFIED

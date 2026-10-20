@@ -52,3 +52,15 @@ prompt
 server.log
 # Skills directory
 /skills/
+# --- LiaraPilot (Python) ---
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+.pytest.ini
+fixtures/real/
+sessions_data/
+liara-dev.log
+
+# but keep the example file
+!.env.example
