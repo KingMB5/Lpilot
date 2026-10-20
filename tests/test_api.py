@@ -95,6 +95,17 @@ def test_level_toggle():
     assert r.status_code == 400
 
 
+def _poll_any(sid: str, statuses: set[str], timeout: float = 20.0) -> dict:
+    deadline = time.time() + timeout
+    last = {}
+    while time.time() < deadline:
+        last = client.get(f"/api/sessions/{sid}").json()
+        if last["status"] in statuses:
+            return last
+        time.sleep(0.15)
+    raise AssertionError(f"timeout waiting for {statuses}; last={last.get('status')} err={last.get('error')}")
+
+
 def test_broken_project_escalates_via_api():
     r = client.post("/api/sessions/demo", json={"fixture": "broken-project"})
     sid = r.json()["session_id"]
@@ -102,6 +113,13 @@ def test_broken_project_escalates_via_api():
     client.post(f"/api/sessions/{sid}/start")
     snap = _poll(sid, "awaiting_approval")
     client.post(f"/api/sessions/{sid}/approve", json={"approved": True, "cost_ok": True, "env_values": {}})
+    # T14: the fix loop now ASKS the user each attempt; answer the questions (empty reply)
+    for _ in range(6):
+        snap = _poll_any(sid, {"awaiting_approval", "escalated"}, timeout=30)
+        if snap["status"] == "escalated":
+            break
+        assert snap["approval"].get("kind") == "question"
+        client.post(f"/api/sessions/{sid}/approve", json={"approved": True, "user_reply": ""})
     snap = _poll(sid, "escalated", timeout=30)
     assert snap["report"]["status"] == "needs_user_decision"
     assert snap["report"]["fix_history"][-1]["attempt"] == 3

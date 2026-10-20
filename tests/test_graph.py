@@ -25,7 +25,8 @@ FULL_ENV = {"DATABASE_URL": "file:./db/custom.db", "ADMIN_PASSWORD": "strong-pas
 
 class Harness:
     def __init__(self, project_dir: str, deployer: MockDeployer | None = None,
-                 register: SecretRegister | None = None, is_cancelled=lambda: False):
+                 register: SecretRegister | None = None, is_cancelled=lambda: False,
+                 llm: FakeLLM | None = None):
         self.project_dir = project_dir
         self.register = register or SecretRegister()
         self.deployer = deployer or MockDeployer()
@@ -35,7 +36,7 @@ class Harness:
             self.events.append({"type": t, "payload": redact_obj(p, self.register)})
 
         self.deps = Deps(
-            llm=FakeLLM(self.register, RunBudget(60000), CONCEPTS),
+            llm=llm or FakeLLM(self.register, RunBudget(60000), CONCEPTS),
             concepts=CONCEPTS,
             deployer=self.deployer,
             emit=emit,
@@ -95,15 +96,28 @@ def test_declined_approval_ends_clean():
     assert h.state().get("deploy_result") is None
 
 
+def _resume_questions(h, first_payload: dict, reply: str = "", max_resumes: int = 6) -> dict:
+    """Resume the pending interrupt; answer ask_user questions with `reply`.
+    The FIRST resume delivers the approval payload; subsequent ones answer questions."""
+    payload = first_payload
+    for _ in range(max_resumes):
+        out = resume(h.graph, h.cfg, payload)
+        if "__interrupt__" not in out:
+            return out
+        payload = {"user_reply": reply}  # question interrupt -> answer it
+    raise AssertionError("too many interrupts")
+
+
 def test_fix_loop_cap_escalates_after_three_attempts():
     h = Harness(BROKEN)  # MISSING_TOKEN required, user gives no value -> mock keeps failing
     h.start(skip_expert=True)
-    out = h.resume({"approved": True, "cost_ok": True, "env_values": {}})
+    out = _resume_questions(h, {"approved": True, "cost_ok": True, "env_values": {}})
     assert out["status"] == "escalated"
     assert out["report"]["status"] == "needs_user_decision"
     assert out["fix_attempts"] == 3
     assert len(out["fix_history"]) == 3
     assert "سقف" in out["report"]["reason"]
+    assert all(e["action"] == "ask_user" for e in out["fix_history"])
 
 
 def test_bad_port_fixed_then_success():
@@ -137,7 +151,8 @@ def test_bad_port_fixed_then_success():
         assert out["status"] == "done"
         assert out["plan"]["port"] == 3000
         assert len(out["fix_history"]) == 1
-        assert "set port 3000" in out["fix_history"][0]["action"]
+        assert out["fix_history"][0]["action"] == "change_port"
+        assert out["fix_history"][0]["params"]["port"] == 3000
 
 
 def test_mock_deployer_canned_failures():

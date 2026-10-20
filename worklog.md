@@ -110,3 +110,38 @@ Stage Summary:
 - Acceptance met: next-prisma-sqlite yields R1-R4 with visibly different beginner/expert texts; approval gate blocks deploy; fix cap escalates after 3; no secrets in any emitted event.
 - Deployer decision for Thursday: pure-Python LiaraApiDeployer via verified HTTP API (preferred); CLI fallback. deploy-sources payload schema still UNVERIFIED -> check paas.yaml.
 - Still needs: Liara credits + real account (real deploy, prices fill), BoxAPI key (real LLM path), official docs re-check (deploy payload, CLI exit codes, releases/rollback).
+
+---
+Task ID: T13
+Agent: Z.ai Code (lead build engineer)
+Task: LiaraApiDeployer complete + mock-tested; OpenAPI facts recorded; DEPLOYER factory.
+
+Work Log:
+- Downloaded https://developers.liara.ir/spec/paas.yaml (54KB, openapi 3.0.1) fully and
+  extracted exact shapes; recorded 3 VERIFIED facts (paas_api_auth, paas_api_endpoints,
+  paas_api_error_codes) + 7 new UNVERIFIED entries in config/defaults.yaml (planID values,
+  disk size units, status strings, {app}.liara.run URL format, sources semantics, disk
+  mount mechanism, logs since format). URL-format check failed on docs SPA -> UNVERIFIED
+  per debug protocol (did not guess).
+- deployers/sources.py: build_source_zip (junk + .env excluded, prepared files override),
+  describe_zip for safe logs.
+- deployers/liara_api.py: Bearer httpx client; deploy = ensure_app (GET 404 -> POST create
+  with LIARA_PLAN_ID, never invented) -> ensure_disks (GET + POST {name,size:str}) ->
+  update-envs ({project, variables[]}) -> sources upload (multipart "file") -> poll status
+  (UNVERIFIED string sets) -> url; retry/backoff on 429/5xx/timeout (our policy, flagged),
+  401/404 fail fast; kind mapping auth_failed/missing_plan/rate_limited/timeout/build_failed;
+  dry_run builds+validates every payload, prints redacted, sends nothing; token never logged.
+- deployers/__init__.py factory DEPLOYER=mock|liara_api|liara_cli (DEMO_MODE forces mock);
+  base.make_deploy_config extended (project_dir, start_command, disks, env_fixes priority);
+  session.liara_token RAM-only + registered in SecretRegister on approve (never echoed).
+- DEBUG PROTOCOL used twice: (1) respx same-pattern re-mock != sequence -> side_effect lists;
+  (2) real bug found by tests: 401 on ensure_app mapped to unknown -> _http_fail now maps
+  401 uniformly to auth_failed.
+- .env.example: DEPLOYER/LIARA_API_TOKEN/LIARA_PLAN_ID/LIARA_DISK_SIZE/LIARA_DRY_RUN.
+
+Stage Summary:
+- 13 new tests (tests/test_liara_api.py) pin the client to paas.yaml BEFORE Thursday:
+  success E2E, existing-app skip, 401 no-retry, missing_plan no-invent, 429 retry, 5xx cap,
+  timeout, build_failed+logs, dry-run sends nothing + redacts + validates, token hygiene,
+  zip exclusions, config merge priority, factory selection. Suite: 75 green.
+- Thursday runbook: set LIARA_DRY_RUN=1 -> inspect payload -> unset -> live.

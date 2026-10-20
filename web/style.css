@@ -643,6 +643,8 @@ body {
 
 .modal-title { margin: 0 0 0.2rem; font-size: 1.15rem; font-weight: 800; }
 .modal-sub { margin: 0 0 1rem; font-size: 0.88rem; }
+.question-text { margin: 0 0 0.9rem; font-size: 1rem; line-height: 1.9; }
+#ask-reply { width: 100%; margin-bottom: 0.6rem; }
 .modal-sec-title { margin: 1.1rem 0 0.5rem; font-size: 0.95rem; font-weight: 700; }
 .modal .cost-row { margin: 0 0 0.3rem; }
 

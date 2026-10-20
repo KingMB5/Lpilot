@@ -42,6 +42,18 @@ def build_liara_json(inspection: dict, port: int | None) -> str:
     return json.dumps(spec, indent=2, ensure_ascii=False)
 
 
+def liara_json_from_plan(plan: dict) -> str:
+    """Regenerate liara.json from the (possibly self-fixed) plan — same VERIFIED
+    schema; the plan is the single source of truth after fix actions."""
+    spec: dict = {"platform": plan.get("platform") or "node"}
+    if plan.get("port"):
+        spec["port"] = plan["port"]
+    if plan.get("disks"):
+        spec["disks"] = [{"name": d["name"], "mountTo": d["mountTo"]}
+                         for d in plan["disks"] if d.get("name") and d.get("mountTo")]
+    return json.dumps(spec, indent=2, ensure_ascii=False)
+
+
 def build_plan_deterministic(inspection: dict, level: str) -> dict:
     """The fallback/authoritative plan — no LLM required, no invention allowed."""
     port = inspection.get("port")
@@ -62,12 +74,14 @@ def build_plan_deterministic(inspection: dict, level: str) -> dict:
     steps.append({"title_fa": "بررسی سلامت آدرس زنده", "detail": "درخواست HTTP به آدرس نهایی"})
 
     files = [{"name": "liara.json", "content": build_liara_json(inspection, port or 3000)}]
+    risk_ids = {r.get("id") for r in inspection.get("risks", [])}
     return {
         "steps": steps,
         "port": port or 3000,
         "platform": platform,
         "env_needed": env_needed,
         "prepared_files": files,
+        "disks": [{"name": "database", "mountTo": "db"}] if "R1_sqlite_without_disk" in risk_ids else [],
         "estimated_cost": cost["estimated_cost"],
         "cost_unverified": cost["cost_unverified"],
     }

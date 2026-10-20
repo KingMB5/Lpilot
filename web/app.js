@@ -896,10 +896,50 @@
     var modal = $('#modal');
     modal.innerHTML = '';
 
-    var title = el('h3', 'modal-title', 'نیاز به تأیید تو');
+    var isQuestion = p.kind === 'question';
+
+    var title = el('h3', 'modal-title', isQuestion ? 'خلبان یک سؤال دارد' : 'نیاز به تأیید تو');
     title.id = 'modal-title';
     modal.appendChild(title);
-    modal.appendChild(el('p', 'muted modal-sub', 'خلبان پیش از هر کار هزینه‌دار، اجازهٔ تو را می‌گیرد.'));
+    modal.appendChild(el('p', 'muted modal-sub',
+      isQuestion ? 'خلبان از روی لاگ‌ها به چیزی نیاز دارد که فقط تو می‌توانی بدهی.'
+                 : 'خلبان پیش از هر کار هزینه‌دار، اجازهٔ تو را می‌گیرد.'));
+
+    if (isQuestion) {
+      modal.appendChild(el('p', 'question-text', String(p.question_fa || '')));
+      var reply = el('input', 'env-input');
+      reply.type = 'text';
+      reply.id = 'ask-reply';
+      reply.placeholder = 'پاسخ‌ات را همین‌جا بنویس…';
+      modal.appendChild(reply);
+
+      var errBoxQ = el('div', 'error-box');
+      errBoxQ.hidden = true;
+      errBoxQ.setAttribute('role', 'alert');
+      modal.appendChild(errBoxQ);
+
+      var actionsQ = el('div', 'modal-actions');
+      var sendBtn = el('button', 'btn btn-primary', 'ارسال پاسخ');
+      sendBtn.type = 'button';
+      sendBtn.id = 'btn-approve';
+      var skipBtn = el('button', 'btn btn-ghost', 'بدون پاسخ');
+      skipBtn.type = 'button';
+      skipBtn.id = 'btn-reject';
+      actionsQ.appendChild(sendBtn);
+      actionsQ.appendChild(skipBtn);
+      modal.appendChild(actionsQ);
+
+      sendBtn.addEventListener('click', function () {
+        sendReply(String(reply.value || ''), sendBtn, skipBtn, errBoxQ);
+      });
+      skipBtn.addEventListener('click', function () {
+        sendReply('', skipBtn, sendBtn, errBoxQ);
+      });
+
+      $('#modal-overlay').hidden = false;
+      reply.focus();
+      return;
+    }
 
     var costRow = el('div', 'cost-row');
     costRow.appendChild(el('span', 'cost-label', 'هزینهٔ تخمینی:'));
@@ -942,6 +982,24 @@
     okBtn.focus();
   }
 
+  /** Answer an ask_user interrupt (T14): a free-text reply for the agent. */
+  function sendReply(text, okBtn, noBtn, errBox) {
+    errBox.hidden = true;
+    okBtn.disabled = true;
+    noBtn.disabled = true;
+    okBtn.textContent = 'در حال ارسال پاسخ…';
+    api.approve(store.sessionId, { approved: true, user_reply: text }).then(function () {
+      closeModal();
+      addNote('پاسخ تو به خلبان رسید؛ ادامه‌ی اصلاح…');
+    }).catch(function (err) {
+      okBtn.disabled = false;
+      noBtn.disabled = false;
+      okBtn.textContent = 'ارسال پاسخ';
+      errBox.hidden = false;
+      errBox.textContent = (err && err.message) ? err.message : 'ارسال پاسخ ناموفق بود.';
+    });
+  }
+
   function collectEnvValues() {
     var out = {};
     var inputs = $('#modal').querySelectorAll('.env-input');
@@ -960,7 +1018,6 @@
     var body = approved
       ? { approved: true, cost_ok: true, env_values: collectEnvValues() }
       : { approved: false };
-
     api.approve(store.sessionId, body).then(function () {
       closeModal();
       if (approved) {

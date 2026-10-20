@@ -13,8 +13,12 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from agent.assessment import assess
-from agent.plan import PlanModel, build_plan_deterministic
+from agent.plan import PlanModel, build_plan_deterministic, liara_json_from_plan
 from deployers.base import make_deploy_config
+from llm.diagnose import (DIAGNOSE_SYSTEM, LOG_TAIL_CHARS, DiagnosisModel,
+                          _missing_env_keys, apply_action, build_diagnose_context,
+                          build_diagnose_user, deterministic_diagnosis, safe_params,
+                          validate_params)
 from llm.explain import explain as explain_risk_text
 from llm.prompts import PLAN_SYSTEM, build_plan_user
 
@@ -103,11 +107,12 @@ def make_plan(state: dict, deps: Deps) -> dict:
         deps.emit("log", {"text": f"plan: llm unavailable ({type(e).__name__}) — deterministic plan"})
         plan = fallback_plan
 
-    # deterministic overrides: port/env/limits are ours, not the LLM's
+    # deterministic overrides: port/env/limits/disks are ours, not the LLM's
     plan["port"] = fallback_plan["port"]
     plan["env_needed"] = fallback_plan["env_needed"]
     plan["platform"] = fallback_plan["platform"]
     plan["prepared_files"] = fallback_plan["prepared_files"]
+    plan["disks"] = fallback_plan["disks"]
     plan.setdefault("cost_unverified", True)
     deps.emit("plan", plan)
     return _decide(state, {"plan": plan, "status": "running"}, "make_plan: deterministic fields enforced")
@@ -172,6 +177,10 @@ def read_logs(state: dict, deps: Deps) -> dict:
 
 
 def fix(state: dict, deps: Deps) -> dict:
+    """Agentic fix loop (T14): the LLM diagnoses from the redacted log tail,
+    deterministic code validates the action against the allowlist, applies it,
+    and logs the decision. Max 3 attempts — enforced HERE, never by the model.
+    ask_user pauses the graph for the human (LangGraph interrupt)."""
     if _cancelled(state, deps):
         return {"status": "cancelled"}
     attempts = int(state.get("fix_attempts", 0))
@@ -181,31 +190,80 @@ def fix(state: dict, deps: Deps) -> dict:
 
     result = state.get("deploy_result", {})
     kind = result.get("kind")
-    plan = json.loads(json.dumps(state.get("plan", {})))  # deep copy
-    approvals = state.get("approvals", {}) or {}
+    log_tail = "\n".join(state.get("logs", []))[-LOG_TAIL_CHARS:]
+    ctx = build_diagnose_context(state, kind, log_tail)
 
-    if kind == "bad_port":
-        plan["port"] = 3000  # documented default for next/node
-        action = f"set port 3000 (was {result.get('message')})"
-        reason = "پورت نامعتبر بود؛ به پیش‌فرض مستند ۳۰۰۰ برگشتیم."
-    elif kind == "missing_env_var":
-        missing = [k for k in plan.get("env_needed", []) if not str((approvals.get("env_values") or {}).get(k, "")).strip()]
-        filled = [k for k in plan.get("env_needed", []) if str((approvals.get("env_values") or {}).get(k, "")).strip()]
-        action = f"merge user-provided values for: {', '.join(filled) or '(none)'}; empty placeholders for: {', '.join(missing) or '(none)'}"
-        reason = "متغیرهای محیطی لازم به کانفیگ استقرار وصل شدند (مقادیر خالی نیازمند ورودی تو هستند)."
-    else:
-        deps.emit("log", {"text": f"no deterministic fix for kind={kind}"})
-        return {"status": "escalated"}
+    def fallback() -> dict:
+        return deterministic_diagnosis(kind, state)
 
+    try:
+        diagnosis = deps.llm.complete_json(DIAGNOSE_SYSTEM, build_diagnose_user(ctx),
+                                           DiagnosisModel, fallback)
+    except Exception as e:  # budget/client failure -> deterministic diagnosis
+        deps.emit("log", {"text": f"diagnose: llm unavailable ({type(e).__name__}) — deterministic diagnosis"})
+        diagnosis = fallback()
+
+    ok, err = validate_params(diagnosis["action"], diagnosis.get("params") or {}, state)
+    if not ok:
+        deps.emit("log", {"text": f"diagnosis rejected ({err}) — deterministic fallback applied"})
+        diagnosis = fallback()
+        if not validate_params(diagnosis["action"], diagnosis.get("params") or {}, state)[0]:
+            diagnosis = {"diagnosis_fa": "اصلاح خودکار ممکن نیست.", "action": "give_up",
+                         "params": {}, "confidence": 0.0}
+
+    action = diagnosis["action"]
+    params = diagnosis.get("params") or {}
     attempts += 1
+    history = list(state.get("fix_history", []))
+
+    if action == "give_up":
+        reason = diagnosis.get("diagnosis_fa", "ادامه‌ی خودکار مسئولانه نیست.")
+        deps.emit("fix", {"attempt": attempts, "max_attempts": MAX_FIX_ATTEMPTS,
+                          "action": "give_up", "reason_fa": reason})
+        return _decide(state, {"fix_attempts": attempts, "status": "escalated",
+                               "escalation_reason": reason,
+                               "fix_history": history + [{"attempt": attempts, "action": "give_up"}]},
+                       f"fix#{attempts}: give_up")
+
+    if action == "ask_user":
+        from langgraph.types import interrupt
+
+        answer = interrupt({"kind": "question", "question_fa": str(params.get("question_fa", "")),
+                            "attempt": attempts, "max_attempts": MAX_FIX_ATTEMPTS})
+        reply = str((answer or {}).get("user_reply", "")).strip()
+        missing = _missing_env_keys(state)
+        if kind == "missing_env_var" and reply and missing:
+            key = missing[0]
+            reg = getattr(deps.llm, "register", None)
+            if reg is not None:
+                reg.add(reply)  # the reply is user input — treat as secret-capable
+            plan = json.loads(json.dumps(state.get("plan", {})))
+            plan.setdefault("env_fixes", {})[key] = reply
+            deps.emit("fix", {"attempt": attempts, "max_attempts": MAX_FIX_ATTEMPTS,
+                              "action": "set_env", "params": {"key": key, "value": "***"},
+                              "reason_fa": f"مقدار «{key}» از پاسخ تو گرفته و در کانفیگ استقرار گذاشته شد."})
+            return _decide(state, {"plan": plan, "fix_attempts": attempts, "status": "running",
+                                   "fix_history": history + [{"attempt": attempts,
+                                                              "action": "set_env", "params": {"key": key}}]},
+                           f"fix#{attempts}: set_env {key} (from user reply)")
+        deps.emit("fix", {"attempt": attempts, "max_attempts": MAX_FIX_ATTEMPTS,
+                          "action": "ask_user", "params": safe_params("ask_user", params),
+                          "reason_fa": diagnosis.get("diagnosis_fa", ""),
+                          "reply_used": bool(reply)})
+        return _decide(state, {"fix_attempts": attempts, "status": "running",
+                               "fix_history": history + [{"attempt": attempts, "action": "ask_user",
+                                                          "reply_used": bool(reply)}]},
+                       f"fix#{attempts}: ask_user (reply {'used' if reply else 'empty'})")
+
+    plan, _desc = apply_action(action, params, state)
+    plan["prepared_files"] = [{"name": "liara.json", "content": liara_json_from_plan(plan)}]
     deps.emit("fix", {"attempt": attempts, "max_attempts": MAX_FIX_ATTEMPTS,
-                      "action": action, "reason_fa": reason})
-    return _decide(
-        state,
-        {"plan": plan, "fix_attempts": attempts, "status": "running",
-         "fix_history": list(state.get("fix_history", [])) + [{"attempt": attempts, "action": action}]},
-        f"fix#{attempts}: {action}",
-    )
+                      "action": action, "params": safe_params(action, params),
+                      "reason_fa": diagnosis.get("diagnosis_fa", "")})
+    return _decide(state, {"plan": plan, "fix_attempts": attempts, "status": "running",
+                           "fix_history": history + [{"attempt": attempts, "action": action,
+                                                      "params": safe_params(action, params)}]},
+                   f"fix#{attempts}: {action} {json.dumps(safe_params(action, params), ensure_ascii=False)}")
 
 
 def verify(state: dict, deps: Deps) -> dict:
@@ -272,9 +330,10 @@ def teach_summary(state: dict, deps: Deps) -> dict:
 
 def escalate(state: dict, deps: Deps) -> dict:
     deps.emit("stage", {"name": "escalate", "fa": "نیاز به تصمیم تو"})
+    reason = state.get("escalation_reason") or "حلقه‌ی خودکار به سقف ۳ تلاش رسید؛ تصمیم با تو است."
     rep = {
         "status": "needs_user_decision",
-        "reason": "حلقه‌ی خودکار به سقف ۳ تلاش رسید؛ تصمیم با تو است.",
+        "reason": reason,
         "deploy_result": state.get("deploy_result", {}),
         "fix_history": state.get("fix_history", []),
         "logs": state.get("logs", []),

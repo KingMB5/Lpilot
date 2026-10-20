@@ -19,6 +19,7 @@ class AgentState(TypedDict, total=False):
     logs: list[str]
     fix_attempts: int
     fix_history: list[dict]
+    escalation_reason: str     # give_up / cap reason surfaced to the escalate node
     decisions: list[dict]      # audit log: every deterministic decision
     report: dict
     learned: list[str]
