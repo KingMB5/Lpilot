@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="description" content="LiaraPilot — خلبان استقرار: استقرار پروژهٔ آمادهٔ تو روی لیارا با کمک هوش مصنوعی" />
+<title>LiaraPilot — خلبان استقرار</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23f59e0b' d='M22 2 11 13 2 9l20-7zM22 2 15 22l-4-9 11-11z'/%3E%3C/svg%3E" />
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M22 2 11 13" /><path d="M22 2 15 22l-4-9-9-4 20-7z" />
+      </svg>
+    </span>
+    <span class="brand-name">LiaraPilot</span>
+    <span class="brand-sub">خلبان استقرار</span>
+  </div>
+  <span id="demo-badge" class="badge badge-amber" hidden>حالت دمو</span>
+</header>
+
+<main class="wrap">
+
+  <!-- ============ A) UPLOAD ============ -->
+  <section id="screen-upload" class="screen" aria-label="بارگذاری پروژه">
+    <h1 class="hero-title">پروژه‌ات را بسپار به خلبان</h1>
+    <p class="hero-sub">
+      خلبان، پروژهٔ آمادهٔ تو را بررسی می‌کند، ریسک‌های استقرار را می‌گوید
+      و با اجازهٔ تو آن را روی لیارا مستقر می‌کند — تا آخرین مرحله همراهت است.
+    </p>
+
+    <div id="dropzone" class="dropzone" role="button" tabindex="0" aria-describedby="dz-hint">
+      <span class="dz-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M12 17V5" /><path d="m6 11 6-6 6 6" /><path d="M4 21h16" />
+        </svg>
+      </span>
+      <p class="dz-title" id="dz-title">فایل zip پروژه را اینجا رها کن</p>
+      <p class="dz-hint" id="dz-hint">یا کلیک کن و از رایانه‌ات انتخاب کن</p>
+      <div id="dz-spinner" class="spinner" hidden aria-hidden="true"></div>
+    </div>
+    <input id="file-input" type="file" accept=".zip,application/zip,application/x-zip-compressed" hidden />
+
+    <div id="upload-error" class="error-box" role="alert" hidden></div>
+
+    <div class="demo-row">
+      <p class="demo-label">یا یکی از پروژه‌های نمونه را امتحان کن:</p>
+      <div class="chips">
+        <button type="button" class="chip" data-fixture="next-prisma-sqlite">فروشگاه عطر</button>
+        <button type="button" class="chip" data-fixture="node-express">اکسپرس ساده</button>
+        <button type="button" class="chip" data-fixture="plain-html">HTML ثابت</button>
+        <button type="button" class="chip" data-fixture="broken-project">پروژه خراب</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ B) ASSESSMENT ============ -->
+  <section id="screen-assessment" class="screen" hidden aria-label="سنجش تجربه">
+    <div class="assess-head">
+      <h2 class="section-h">چند سؤال کوتاه</h2>
+      <p class="muted">جواب‌ها فقط تعیین می‌کنند خلبان چقدر مفصل برایت توضیح بدهد.</p>
+    </div>
+
+    <button type="button" id="btn-expert-skip" class="btn btn-ghost btn-skip btn-block">…</button>
+
+    <div id="questions" class="questions"></div>
+
+    <div id="assess-error" class="error-box" role="alert" hidden></div>
+
+    <div class="assess-actions">
+      <button type="button" id="btn-start" class="btn btn-primary btn-block" disabled>شروع بررسی</button>
+      <p id="assess-hint" class="hint muted">برای شروع، به همهٔ سؤال‌ها پاسخ بده.</p>
+    </div>
+  </section>
+
+  <!-- ============ C) RUN (timeline) ============ -->
+  <section id="screen-run" class="screen" hidden aria-label="مرحلهٔ استقرار">
+    <div class="run-head">
+      <div class="run-title">
+        <h2 id="stage-title">در حال آماده‌سازی…</h2>
+      </div>
+      <div class="run-controls">
+        <div class="seg" role="group" aria-label="سطح توضیح">
+          <button type="button" id="lvl-beginner" class="seg-btn" aria-pressed="true">توضیح بیشتر</button>
+          <button type="button" id="lvl-expert" class="seg-btn" aria-pressed="false">خلاصه‌تر</button>
+        </div>
+        <button type="button" id="btn-cancel" class="btn btn-ghost btn-danger-ghost">لغو عملیات</button>
+      </div>
+    </div>
+    <ol id="timeline" class="timeline" aria-live="polite"></ol>
+  </section>
+
+  <!-- ============ D) REPORT ============ -->
+  <section id="screen-report" class="screen" hidden aria-label="گزارش نهایی">
+    <div id="report-root"></div>
+    <div class="report-actions">
+      <button type="button" id="btn-new" class="btn btn-primary">پروژه جدید</button>
+    </div>
+  </section>
+
+  <!-- ============ E) EXPIRED ============ -->
+  <section id="screen-expired" class="screen" hidden aria-label="جلسه منقضی شد">
+    <div class="expired-card">
+      <p class="expired-msg">جلسه منقضی شده است. سرویس راه‌اندازی مجدد شده — لطفاً دوباره شروع کن.</p>
+      <button type="button" id="btn-restart" class="btn btn-primary">شروع دوباره</button>
+    </div>
+  </section>
+
+</main>
+
+<footer class="foot muted">LiaraPilot — ساخته‌شده برای چالش لیارا</footer>
+
+<!-- Approval modal (built by JS) -->
+<div id="modal-overlay" class="modal-overlay" hidden>
+  <div id="modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title"></div>
+</div>
+
+<noscript><p class="noscript">این برنامه برای کار کردن به جاوااسکریپت نیاز دارد.</p></noscript>
+
+<script src="app.js"></script>
+</body>
+</html>
