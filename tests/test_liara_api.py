@@ -1,0 +1,285 @@
+"""T13 — LiaraApiDeployer contract tests against recorded HTTP fixtures (respx).
+
+Every request/response shape mirrors the official OpenAPI spec (paas.yaml,
+checked 2026-10-20 — see config/defaults.yaml). These tests pin our client to
+that contract BEFORE any real call happens (dry-run first, then live Thursday).
+"""
+
+from __future__ import annotations
+
+import io
+import json
+import pathlib
+import tempfile
+import zipfile
+
+import httpx
+import pytest
+import respx
+
+from deployers import make_deployer
+from deployers.base import make_deploy_config
+from deployers.liara_api import LiaraApiDeployer
+from deployers.sources import build_source_zip, describe_zip
+
+BASE = "https://api.liara.ir"
+TOKEN = "liara-token-abc123"
+PLAN = "g2"
+
+
+@pytest.fixture(autouse=True)
+def _clean_env(monkeypatch):
+    for var in ("DEMO_MODE", "DEPLOYER", "LIARA_API_TOKEN", "LIARA_PLAN_ID",
+                "LIARA_DISK_SIZE", "LIARA_DRY_RUN", "LIARA_API_BASE_URL"):
+        monkeypatch.delenv(var, raising=False)
+
+
+def deployer(**kw) -> LiaraApiDeployer:
+    kw.setdefault("api_token", TOKEN)
+    kw.setdefault("plan_id", PLAN)
+    kw.setdefault("backoff_base", 0)
+    kw.setdefault("sleep", lambda _s: None)
+    return LiaraApiDeployer(**kw)
+
+
+def tmp_project() -> str:
+    d = pathlib.Path(tempfile.mkdtemp())
+    d.joinpath("index.js").write_text("console.log(1)", encoding="utf-8")
+    return str(d)
+
+
+def _cfg(project_dir: str, **over) -> dict:
+    base = {
+        "app_name": "my-app",
+        "platform": "node",
+        "port": 3000,
+        "env": {"ADMIN_PASSWORD": "s3cret-value"},
+        "required_env": ["ADMIN_PASSWORD"],
+        "prepared_files": [{"name": "liara.json", "content": '{"platform":"node","port":3000}'}],
+        "disks": [],
+        "start_command": "npm start",
+        "project_dir": project_dir,
+    }
+    base.update(over)
+    return base
+
+
+def _zip_from_multipart(body: bytes) -> bytes:
+    """Extract the sources.zip payload from a multipart/form-data request body."""
+    marker = b'filename="sources.zip"'
+    i = body.find(marker)
+    assert i != -1, "multipart body lacks sources.zip part"
+    head = body.find(b"\r\n\r\n", i) + 4
+    tail = body.find(b"\r\n--", head)
+    return body[head:tail]
+
+
+# ---------------------------------------------------------------- happy paths
+
+@respx.mock
+def test_success_flow_creates_app_disk_envs_and_uploads(tmp_path):
+    get_app = respx.get(f"{BASE}/v1/projects/my-app").mock(side_effect=[
+        httpx.Response(404),   # ensure_app: does not exist
+        httpx.Response(200, json={"project": {"project_id": "my-app", "status": "running"}}),  # poll
+    ])
+    create = respx.post(f"{BASE}/v1/projects").mock(return_value=httpx.Response(200))
+    respx.get(f"{BASE}/v1/projects/my-app/disks").mock(
+        return_value=httpx.Response(200, json={"disks": [], "mounts": []}))
+    disk = respx.post(f"{BASE}/v1/projects/my-app/disks").mock(return_value=httpx.Response(201))
+    envs = respx.post(f"{BASE}/v1/projects/update-envs").mock(
+        return_value=httpx.Response(200, json={"message": "ok"}))
+    upload = respx.post(f"{BASE}/v2/projects/my-app/sources").mock(
+        return_value=httpx.Response(200, json={"sourceID": "src-1"}))
+
+    res = deployer().deploy(_cfg(tmp_project(), disks=[{"name": "database", "mountTo": "db"}]))
+
+    assert res["ok"] is True and res["kind"] == "success"
+    assert res["url"] == "https://my-app.liara.run"
+    assert get_app.call_count == 2  # 404 then running
+    # create body matches the VERIFIED schema
+    create_body = json.loads(create.calls.last.request.content)
+    assert create_body == {"name": "my-app", "planID": PLAN, "platform": "node"}
+    # disk body: string size per spec
+    assert json.loads(disk.calls.last.request.content) == {"name": "database", "size": "1G"}
+    # env VALUES go to update-envs and nowhere else
+    env_body = json.loads(envs.calls.last.request.content)
+    assert env_body["project"] == "my-app"
+    assert {"key": "ADMIN_PASSWORD", "value": "s3cret-value"} in env_body["variables"]
+    # upload is multipart field "file"; zip carries liara.json + sources
+    req = upload.calls.last.request
+    assert req.headers["authorization"] == f"Bearer {TOKEN}"
+    zf = zipfile.ZipFile(io.BytesIO(_zip_from_multipart(req.content)))
+    assert "liara.json" in zf.namelist() and "index.js" in zf.namelist()
+
+
+@respx.mock
+def test_existing_app_skips_create():
+    get_app = respx.get(f"{BASE}/v1/projects/existing").mock(return_value=httpx.Response(
+        200, json={"project": {"project_id": "existing", "status": "running"}}))
+    respx.post(f"{BASE}/v2/projects/existing/sources").mock(
+        return_value=httpx.Response(200, json={"sourceID": "s"}))
+    create = respx.post(f"{BASE}/v1/projects").mock(return_value=httpx.Response(200))
+
+    res = deployer().deploy({"app_name": "existing", "platform": "node", "port": 3000,
+                             "env": {}, "required_env": [], "prepared_files": [],
+                             "disks": [], "project_dir": tmp_project()})
+    assert res["ok"] is True and res["kind"] == "success"
+    assert create.call_count == 0  # app existed — never re-created
+    assert get_app.call_count == 2  # existence check + one status poll
+
+
+# ---------------------------------------------------------------- auth / errors
+
+@respx.mock
+def test_401_fails_fast_without_retry():
+    route = respx.get(f"{BASE}/v1/projects/my-app").mock(return_value=httpx.Response(401))
+    res = deployer().deploy(_cfg("/tmp"))
+    assert res["ok"] is False and res["kind"] == "auth_failed"
+    assert route.call_count == 1  # no retry on auth errors
+
+
+@respx.mock
+def test_missing_plan_blocks_create_without_inventing():
+    respx.get(f"{BASE}/v1/projects/my-app").mock(return_value=httpx.Response(404))
+    create = respx.post(f"{BASE}/v1/projects").mock(return_value=httpx.Response(200))
+    res = deployer(plan_id="").deploy(_cfg("/tmp"))
+    assert res["ok"] is False and res["kind"] == "missing_plan"
+    assert "UNVERIFIED" in res["message"]
+    assert create.call_count == 0  # never invent a plan
+
+
+@respx.mock
+def test_429_retried_with_backoff_then_success():
+    route = respx.post(f"{BASE}/v1/projects/update-envs").mock(side_effect=[
+        httpx.Response(429), httpx.Response(429), httpx.Response(200, json={"message": "ok"})])
+    respx.post(f"{BASE}/v2/projects/my-app/sources").mock(
+        return_value=httpx.Response(200, json={"sourceID": "s"}))
+    respx.get(f"{BASE}/v1/projects/my-app").mock(side_effect=[
+        httpx.Response(200, json={"project": {"status": "running"}}),   # ensure
+        httpx.Response(200, json={"project": {"status": "running"}}),   # poll
+    ])
+
+    res = deployer().deploy(_cfg(tmp_project()))
+    assert res["ok"] is True
+    assert route.call_count == 3  # 429, 429, then success
+
+
+@respx.mock
+def test_5xx_gives_up_after_max_retries():
+    route = respx.post(f"{BASE}/v2/projects/my-app/sources").mock(return_value=httpx.Response(500))
+    respx.get(f"{BASE}/v1/projects/my-app").mock(return_value=httpx.Response(
+        200, json={"project": {"status": "running"}}))
+    respx.post(f"{BASE}/v1/projects/update-envs").mock(
+        return_value=httpx.Response(200, json={"message": "ok"}))
+
+    d = deployer()
+    res = d.deploy(_cfg(tmp_project()))
+    assert res["ok"] is False and res["kind"] == "unknown"
+    assert "500" in res["message"]
+    assert route.call_count == d.max_retries
+
+
+@respx.mock
+def test_timeout_maps_to_timeout_kind():
+    respx.post(f"{BASE}/v2/projects/my-app/sources").mock(side_effect=httpx.ConnectTimeout("boom"))
+    respx.get(f"{BASE}/v1/projects/my-app").mock(return_value=httpx.Response(
+        200, json={"project": {"status": "running"}}))
+    respx.post(f"{BASE}/v1/projects/update-envs").mock(
+        return_value=httpx.Response(200, json={"message": "ok"}))
+
+    res = deployer().deploy(_cfg(tmp_project()))
+    assert res["ok"] is False and res["kind"] == "timeout"
+
+
+@respx.mock
+def test_build_failed_status_returns_logs_for_fix_loop():
+    respx.post(f"{BASE}/v2/projects/my-app/sources").mock(
+        return_value=httpx.Response(200, json={"sourceID": "s"}))
+    respx.get(f"{BASE}/v1/projects/my-app").mock(return_value=httpx.Response(
+        200, json={"project": {"status": "failed"}}))
+    respx.post(f"{BASE}/v1/projects/update-envs").mock(
+        return_value=httpx.Response(200, json={"message": "ok"}))
+    respx.get(f"{BASE}/v1/projects/my-app/logs").mock(return_value=httpx.Response(
+        200, json=[{"type": "error", "datetime": "2026-10-20", "message": "npm ERR! missing script"}]))
+
+    res = deployer().deploy(_cfg(tmp_project()))
+    assert res["ok"] is False and res["kind"] == "build_failed"
+    assert any("npm ERR!" in line for line in res["logs"])
+
+
+# ---------------------------------------------------------------- dry run
+
+@respx.mock
+def test_dry_run_validates_payloads_without_sending(tmp_path):
+    catch_all = respx.route().mock(return_value=httpx.Response(200, json={}))
+
+    res = deployer(dry_run=True).deploy(_cfg(tmp_project(), disks=[{"name": "database", "mountTo": "db"}]))
+
+    assert res["ok"] is True and res["kind"] == "dry_run"
+    assert res["problems"] == []
+    assert catch_all.call_count == 0          # NOTHING was sent
+    blob = "\n".join(res["logs"])
+    assert TOKEN not in blob                  # token redacted
+    assert "s3cret-value" not in blob         # env values redacted
+    assert '"value": "***"' in blob
+    assert res["artifact"]["has_liara_json"] is True
+    # dry-run catches a bad config deterministically
+    res2 = deployer(dry_run=True, plan_id="").deploy(_cfg(tmp_project()))
+    assert res2["kind"] == "dry_run_failed"
+    assert any("LIARA_PLAN_ID" in p for p in res2["problems"])
+
+
+# ---------------------------------------------------------------- secret hygiene
+
+@respx.mock
+def test_token_never_appears_in_deployer_logs():
+    respx.get(f"{BASE}/v1/projects/my-app").mock(return_value=httpx.Response(404))
+    respx.post(f"{BASE}/v1/projects").mock(return_value=httpx.Response(401))
+    respx.get(f"{BASE}/v1/projects/my-app/logs").mock(return_value=httpx.Response(401))
+    d = deployer()
+    res = d.deploy(_cfg("/tmp"))
+    assert res["ok"] is False
+    blob = "\n".join(res["logs"]) + "\n".join(d.logs())
+    assert TOKEN not in blob
+
+
+# ---------------------------------------------------------------- zip + config helpers
+
+def test_source_zip_excludes_secrets_and_junk(tmp_path):
+    (tmp_path / "node_modules").mkdir()
+    (tmp_path / "node_modules" / "x.js").write_text("junk", encoding="utf-8")
+    (tmp_path / ".env").write_text("ADMIN_PASSWORD=super-secret-1", encoding="utf-8")
+    (tmp_path / "app.js").write_text("console.log('app')", encoding="utf-8")
+    (tmp_path / "cache.log").write_text("log", encoding="utf-8")
+    data = build_source_zip(str(tmp_path), [{"name": "liara.json", "content": "{}"}])
+    names = set(zipfile.ZipFile(io.BytesIO(data)).namelist())
+    assert names == {"app.js", "liara.json"}
+    meta = describe_zip(data)
+    assert meta["entries"] == 2 and meta["has_liara_json"] is True
+
+
+def test_make_deploy_config_merges_env_fixes_over_approvals():
+    inspection = {"platform": "node", "env_vars_required": ["X"], "start_command": "npm start"}
+    plan = {"app_name": "a", "port": 3000, "env_placeholders": {"X": ""},
+            "env_fixes": {"X": "from-agent"}, "disks": [{"name": "d", "mountTo": "db"}]}
+    cfg = make_deploy_config(inspection, plan, {"env_values": {"X": "from-user"}},
+                             project_dir="/proj")
+    assert cfg["env"]["X"] == "from-agent"    # agent fix wins (deterministic override)
+    assert cfg["project_dir"] == "/proj"
+    assert cfg["start_command"] == "npm start"
+    assert cfg["disks"] == [{"name": "d", "mountTo": "db"}]
+
+
+# ---------------------------------------------------------------- factory
+
+def test_factory_selects_by_env(monkeypatch):
+    monkeypatch.setenv("DEPLOYER", "liara_api")
+    monkeypatch.setenv("LIARA_API_TOKEN", TOKEN)
+    assert make_deployer().name == "liara-api"
+
+    monkeypatch.setenv("DEPLOYER", "mock")
+    assert make_deployer().name == "mock"
+
+    monkeypatch.setenv("DEPLOYER", "liara_api")
+    monkeypatch.setenv("DEMO_MODE", "1")      # demo always wins -> offline
+    assert make_deployer().name == "mock"

@@ -1,0 +1,378 @@
+"""LiaraApiDeployer — pure-Python deploy over Liara's documented PaaS HTTP API.
+
+Every request/response shape comes from the official OpenAPI spec
+(https://developers.liara.ir/spec/paas.yaml, checked 2026-10-20; recorded as
+VERIFIED facts `paas_api_auth` / `paas_api_endpoints` / `paas_api_error_codes`
+in config/defaults.yaml). Anything the spec does not define is treated as
+UNVERIFIED and is never invented: planID values, disk-size units, app status
+strings, the live-URL format and the log `since` semantics are config inputs or
+flagged best-effort behavior — see unverified_facts in config/defaults.yaml.
+
+Deploy sequence (one deploy() call):
+  1. GET  /v1/projects/{name}              -> app exists? else create (needs planID)
+  2. GET  /v1/projects/{id}/disks          -> create missing disks (paid: post-approval only)
+  3. POST /v1/projects/update-envs         -> env VALUES go here, nowhere else
+  4. POST /v2/projects/{name}/sources      -> zip of the project (secrets excluded)
+  5. poll GET /v1/projects/{name}          -> status until ok/bad or timeout
+  6. url = https://{name}.liara.run        -> UNVERIFIED format (flagged)
+
+Security (AGENTS.md):
+- The API token lives only in this instance's memory. It is never logged,
+  never serialized, and redacted in dry-run output.
+- dry_run mode builds and validates every request payload and prints it with
+  secrets redacted, without sending anything. Thursday's first real call will
+  be dry-run, then live.
+- Retry-with-backoff on 429/5xx/timeout (our policy); 401/404 fail fast.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import time
+from typing import Any, Callable
+
+import httpx
+
+from app.config import load_defaults
+from deployers.sources import ZIP_NAME, build_source_zip, describe_zip
+
+RETRY_STATUSES = {429, 500, 502, 503, 504}
+
+# UNVERIFIED app status strings (spec does not enumerate them) — best-effort sets.
+STATUS_OK = {"running", "ok", "ready", "started", "active", "online", "healthy"}
+STATUS_BAD = {"failed", "error", "crashed", "crash", "exited", "dead"}
+
+LOG_LINE_LIMIT = 200  # keep the last N lines for the self-fix loop
+
+
+class DeployerConfigError(Exception):
+    """Deterministic configuration failure (e.g. missing token/planID)."""
+
+
+class LiaraApiDeployer:
+    name = "liara-api"
+
+    def __init__(self, api_token: str | None = None, *, base_url: str | None = None,
+                 plan_id: str | None = None, disk_size: str | None = None,
+                 poll_timeout_s: float | None = None, backoff_base: float | None = None,
+                 sleep: Callable[[float], None] = time.sleep, dry_run: bool | None = None) -> None:
+        d = load_defaults().get("deploy", {})
+        self._api_token = (api_token or os.getenv("LIARA_API_TOKEN", "")).strip()
+        self.base_url = (base_url or os.getenv("LIARA_API_BASE_URL", "https://api.liara.ir")).rstrip("/")
+        self.plan_id = (plan_id if plan_id is not None else os.getenv("LIARA_PLAN_ID", "")).strip()
+        self.disk_size = (disk_size if disk_size is not None else os.getenv("LIARA_DISK_SIZE", "1G")).strip()
+        self.http_timeout_s = float(os.getenv("LIARA_HTTP_TIMEOUT_S", str(d.get("http_timeout_s", 30))))
+        self.poll_interval_s = float(d.get("poll_interval_s", 5))
+        self.poll_timeout_s = float(poll_timeout_s if poll_timeout_s is not None else d.get("timeout_s", 600))
+        self.max_retries = int(d.get("max_retries", 3))
+        self.backoff_base = float(backoff_base if backoff_base is not None else 0.5)
+        self._sleep = sleep
+        self.dry_run = (os.getenv("LIARA_DRY_RUN", "") == "1") if dry_run is None else bool(dry_run)
+        self._logs: list[str] = []
+        self._url: str | None = None
+        self._app_name: str | None = None
+
+    # ------------------------------------------------------------ HTTP core
+
+    def _headers(self) -> dict[str, str]:
+        # VERIFIED (paas_api_auth): "Authorization: Bearer <token>"
+        return {"Authorization": f"Bearer {self._api_token}"}
+
+    def _request(self, method: str, path: str, *, json_body: dict | None = None,
+                 files: dict | None = None, data: dict | None = None,
+                 params: dict | None = None) -> httpx.Response:
+        last_exc: Exception | None = None
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                with httpx.Client(base_url=self.base_url, timeout=self.http_timeout_s) as client:
+                    resp = client.request(method, path, headers=self._headers(),
+                                          json=json_body, files=files, data=data, params=params)
+                if resp.status_code in RETRY_STATUSES:
+                    last_exc = httpx.HTTPStatusError(f"{resp.status_code}", request=resp.request, response=resp)
+                    self._log(f"http {method} {path} -> {resp.status_code}, retry {attempt}/{self.max_retries}")
+                else:
+                    return resp
+            except httpx.TimeoutException as e:
+                last_exc = e
+                self._log(f"http {method} {path} -> timeout, retry {attempt}/{self.max_retries}")
+            except httpx.HTTPError as e:  # connection errors etc.
+                last_exc = e
+                self._log(f"http {method} {path} -> {type(e).__name__}, retry {attempt}/{self.max_retries}")
+            if attempt < self.max_retries:
+                self._sleep(self.backoff_base * (2 ** (attempt - 1)))
+        if isinstance(last_exc, httpx.TimeoutException):
+            raise last_exc
+        if isinstance(last_exc, httpx.HTTPStatusError):
+            return last_exc.response
+        raise last_exc if last_exc else RuntimeError("request loop exited unexpectedly")
+
+    def _log(self, line: str) -> None:
+        # defense in depth: never let the token leak into our own log lines
+        self._logs.append(line.replace(self._api_token, "***") if self._api_token else line)
+
+    # ------------------------------------------------------------ Deployer API
+
+    def deploy(self, config: dict[str, Any]) -> dict:
+        """config: {app_name, platform, port, env, required_env, prepared_files,
+        disks?, start_command?, project_dir?} — see deployers.base.make_deploy_config."""
+        self._logs = []
+        app = str(config.get("app_name") or "").strip()
+        if not app:
+            return {"ok": False, "kind": "unknown", "message": "missing app_name", "logs": list(self._logs)}
+        self._app_name = app
+
+        if self.dry_run:
+            return self._dry_run(config, app)
+
+        if not self._api_token:
+            return {"ok": False, "kind": "auth_failed", "message": "no LIARA_API_TOKEN in memory",
+                    "logs": list(self._logs)}
+
+        try:
+            if (err := self._ensure_app(app, config)) is not None:
+                return err
+            if (err := self._ensure_disks(app, config)) is not None:
+                return err
+            if (err := self._update_envs(app, config)) is not None:
+                return err
+            if (err := self._upload_sources(app, config)) is not None:
+                return err
+            return self._await_running(app)
+        except httpx.TimeoutException:
+            return {"ok": False, "kind": "timeout", "message": "request timeout after retries",
+                    "logs": list(self._logs)}
+        except httpx.HTTPError as e:
+            return {"ok": False, "kind": "unknown", "message": f"http error: {type(e).__name__}",
+                    "logs": list(self._logs)}
+
+    def logs(self) -> list[str]:
+        """App logs (VERIFIED GET /v1/projects/{name}/logs -> [{type,datetime,message}])."""
+        if not self._app_name or not self._api_token:
+            return list(self._logs)
+        try:
+            resp = self._request("GET", f"/v1/projects/{self._app_name}/logs")
+            if resp.status_code != 200:
+                self._log(f"logs -> http {resp.status_code}")
+                return list(self._logs)
+            items = resp.json() if isinstance(resp.json(), list) else []
+            lines = [f"{it.get('datetime', '')} {it.get('type', '')}: {it.get('message', '')}".strip()
+                     for it in items]
+            return (list(self._logs) + lines)[-LOG_LINE_LIMIT:]
+        except httpx.HTTPError as e:
+            self._log(f"logs fetch failed: {type(e).__name__}")
+            return list(self._logs)
+
+    def status(self) -> dict:
+        """{healthy, url?} — health view for the verify step."""
+        if self.dry_run or not self._app_name or not self._api_token:
+            return {"healthy": False, "url": self._url}
+        try:
+            resp = self._request("GET", f"/v1/projects/{self._app_name}")
+            if resp.status_code != 200:
+                return {"healthy": False, "url": self._url}
+            st = str((resp.json().get("project") or {}).get("status", "")).lower()
+            return {"healthy": st in STATUS_OK, "url": self._url, "status": st}
+        except httpx.HTTPError:
+            return {"healthy": False, "url": self._url}
+
+    # ------------------------------------------------------------ steps
+
+    def _ensure_app(self, app: str, config: dict) -> dict | None:
+        resp = self._request("GET", f"/v1/projects/{app}")
+        if resp.status_code == 200:
+            self._log(f"app exists: {app}")
+            return None
+        if resp.status_code != 404:
+            return self._http_fail(resp, "ensure_app")
+        # 404 -> create. VERIFIED body schema {name, planID, platform, ...}.
+        # planID values are UNVERIFIED -> operator provides LIARA_PLAN_ID; never invent.
+        if not self.plan_id:
+            return {"ok": False, "kind": "missing_plan",
+                    "message": "LIARA_PLAN_ID is required to create the app (values UNVERIFIED — see Liara console)",
+                    "logs": list(self._logs)}
+        body = {"name": app, "planID": self.plan_id, "platform": config.get("platform") or "node"}
+        self._log(f"create app: {app} platform={body['platform']} planID=***")
+        resp = self._request("POST", "/v1/projects", json_body=body)
+        if resp.status_code in (200, 201):
+            return None
+        return self._http_fail(resp, "create app")
+
+    def _ensure_disks(self, app: str, config: dict) -> dict | None:
+        disks = [d for d in (config.get("disks") or []) if str(d.get("name") or "").strip()]
+        if not disks:
+            return None
+        resp = self._request("GET", f"/v1/projects/{app}/disks")
+        existing: set[str] = set()
+        if resp.status_code == 200:
+            body = resp.json() if isinstance(resp.json(), dict) else {}
+            existing = {str(x.get("name")) for x in body.get("disks", []) if isinstance(x, dict)}
+        else:
+            self._log(f"disks list -> http {resp.status_code} (creating anyway)")
+        for d in disks:
+            if d["name"] in existing:
+                self._log(f"disk exists: {d['name']}")
+                continue
+            # VERIFIED body {name: string, size: string}; size units UNVERIFIED.
+            self._log(f"create disk: {d['name']} size={self.disk_size}")
+            resp = self._request("POST", f"/v1/projects/{app}/disks",
+                                 json_body={"name": d["name"], "size": self.disk_size})
+            if resp.status_code not in (200, 201):
+                return self._http_fail(resp, f"create disk {d['name']}")
+        return None
+
+    def _update_envs(self, app: str, config: dict) -> dict | None:
+        env = config.get("env") or {}
+        if not env:
+            return None
+        variables = [{"key": str(k), "value": str(v)} for k, v in sorted(env.items())]
+        # VERIFIED body {project, variables:[{key,value}]} — VALUES go only here.
+        self._log(f"update-envs: {len(variables)} variable(s) for {app}")
+        resp = self._request("POST", "/v1/projects/update-envs",
+                             json_body={"project": app, "variables": variables})
+        if resp.status_code == 200:
+            return None
+        return self._http_fail(resp, "update-envs")
+
+    def _upload_sources(self, app: str, config: dict) -> dict | None:
+        try:
+            data = build_source_zip(str(config.get("project_dir") or ""),
+                                    config.get("prepared_files") or [])
+        except (FileNotFoundError, ValueError) as e:
+            return {"ok": False, "kind": "unknown", "message": f"source zip failed: {e}",
+                    "logs": list(self._logs)}
+        meta = describe_zip(data)
+        self._log(f"upload sources: {meta['filename']} entries={meta['entries']} "
+                  f"bytes={meta['bytes']} liara_json={meta['has_liara_json']}")
+        # VERIFIED multipart field "file" (binary); -> 200 {sourceID}.
+        resp = self._request("POST", f"/v2/projects/{app}/sources",
+                             files={"file": (ZIP_NAME, data, "application/zip")})
+        if resp.status_code == 200:
+            body = resp.json() if isinstance(resp.json(), dict) else {}
+            self._log(f"source accepted: sourceID={body.get('sourceID', '?')}")
+            return None
+        return self._http_fail(resp, "upload sources")
+
+    def _await_running(self, app: str) -> dict:
+        """Poll GET /v1/projects/{name} until an OK/BAD status or timeout.
+        Status strings are UNVERIFIED (best-effort sets) — real confirmation is
+        the HTTP check of the live URL in the graph's verify step."""
+        deadline = time.monotonic() + self.poll_timeout_s
+        last_status = ""
+        while time.monotonic() < deadline:
+            resp = self._request("GET", f"/v1/projects/{app}")
+            if resp.status_code == 200:
+                proj = (resp.json() or {}).get("project") or {}
+                last_status = str(proj.get("status", "")).lower()
+                if last_status in STATUS_OK:
+                    break
+                if last_status in STATUS_BAD:
+                    self._log(f"app status: {last_status} — fetching logs")
+                    return {"ok": False, "kind": "build_failed",
+                            "message": f"app status: {last_status}", "logs": self.logs()}
+            else:
+                self._log(f"poll -> http {resp.status_code}")
+            self._sleep(self.poll_interval_s)
+        else:
+            return {"ok": False, "kind": "build_failed", "message": f"deploy timeout ({self.poll_timeout_s}s), last status: {last_status or '?'}",
+                    "logs": self.logs()}
+        # UNVERIFIED URL format — flagged in logs; verify step does a real HTTP check.
+        self._url = f"https://{app}.liara.run"
+        self._log(f"deploy finished. url: {self._url} (format UNVERIFIED — verify step will confirm)")
+        return {"ok": True, "kind": "success", "message": "deployed", "url": self._url,
+                "logs": list(self._logs)}
+
+    # ------------------------------------------------------------ misc
+
+    def _http_fail(self, resp: httpx.Response, what: str) -> dict:
+        if resp.status_code == 401:
+            return {"ok": False, "kind": "auth_failed",
+                    "message": f"{what}: 401 unauthorized (check API token)", "logs": list(self._logs)}
+        if resp.status_code == 429:
+            return {"ok": False, "kind": "rate_limited",
+                    "message": f"{what}: 429 rate limited after {self.max_retries} retries",
+                    "logs": list(self._logs)}
+        return {"ok": False, "kind": "unknown",
+                "message": f"{what}: http {resp.status_code}", "logs": list(self._logs)}
+
+    # ------------------------------------------------------------ dry run
+
+    def _plan_requests(self, config: dict, app: str) -> list[dict]:
+        """The exact request sequence deploy() would send, as redacted dicts.
+        Shared by dry_run; the shape is validated here too."""
+        env = config.get("env") or {}
+        reqs: list[dict] = [
+            {"op": "ensure_app", "method": "GET", "path": f"/v1/projects/{app}",
+             "headers": {"Authorization": "Bearer ***"}},
+        ]
+        if config.get("disks"):
+            reqs.append({"op": "list_disks", "method": "GET",
+                         "path": f"/v1/projects/{app}/disks",
+                         "headers": {"Authorization": "Bearer ***"}})
+        for d in config.get("disks") or []:
+            reqs.append({"op": "create_disk", "method": "POST",
+                         "path": f"/v1/projects/{app}/disks",
+                         "json": {"name": str(d.get("name", "")), "size": self.disk_size},
+                         "note": "size units UNVERIFIED"})
+        if env:
+            reqs.append({"op": "update_envs", "method": "POST", "path": "/v1/projects/update-envs",
+                         "json": {"project": app,
+                                  "variables": [{"key": k, "value": "***"} for k in sorted(env)]},
+                         "note": f"{len(env)} value(s) redacted in dry-run"})
+        prepared = config.get("prepared_files") or []
+        reqs.append({"op": "upload_sources", "method": "POST",
+                     "path": f"/v2/projects/{app}/sources",
+                     "multipart": {"file": ZIP_NAME},
+                     "prepared_files": [str(f.get("name")) for f in prepared]})
+        reqs.append({"op": "poll_status", "method": "GET", "path": f"/v1/projects/{app}",
+                     "note": f"poll every {self.poll_interval_s}s up to {self.poll_timeout_s}s"})
+        reqs.append({"op": "logs", "method": "GET", "path": f"/v1/projects/{app}/logs",
+                     "note": "since param format UNVERIFIED — omitted"})
+        return reqs
+
+    def _validate_plan(self, reqs: list[dict], config: dict) -> list[str]:
+        """Deterministic payload validation before Thursday's first live call."""
+        problems: list[str] = []
+        app = self._app_name or ""
+        if not app or any(c in app for c in "/ \t"):
+            problems.append("app_name invalid (must be a bare project name)")
+        if not self._api_token:
+            problems.append("no API token in memory (approve flow or LIARA_API_TOKEN)")
+        if not self.plan_id:
+            problems.append("LIARA_PLAN_ID empty — app creation would be refused (UNVERIFIED values)")
+        if not config.get("project_dir"):
+            problems.append("no project_dir in deploy config — sources upload impossible")
+        platform = config.get("platform")
+        allowed = set(load_defaults().get("deploy", {}).get("platform_values", []))
+        if platform not in allowed:
+            problems.append(f"platform '{platform}' not in verified liara.json values {sorted(allowed)}")
+        port = config.get("port")
+        if not isinstance(port, int) or not (1 <= port <= 65535):
+            problems.append(f"port {port!r} invalid")
+        for r in reqs:
+            if r.get("json") is not None and not isinstance(r["json"], dict):
+                problems.append(f"{r['op']}: json body must be an object")
+        return problems
+
+    def _dry_run(self, config: dict, app: str) -> dict:
+        reqs = self._plan_requests(config, app)
+        problems = self._validate_plan(reqs, config)
+        self._log(f"DRY-RUN for app {app} — {len(reqs)} request(s) planned, nothing sent")
+        for r in reqs:
+            self._log("DRY-RUN " + json.dumps(r, ensure_ascii=False))
+        for p in problems:
+            self._log(f"DRY-RUN PROBLEM: {p}")
+        zip_meta: dict | None = None
+        if config.get("project_dir"):
+            try:
+                zip_meta = describe_zip(build_source_zip(str(config["project_dir"]),
+                                                         config.get("prepared_files") or []))
+                self._log(f"DRY-RUN artifact: {json.dumps(zip_meta, ensure_ascii=False)}")
+            except (OSError, ValueError) as e:
+                self._log(f"DRY-RUN PROBLEM: artifact build failed: {e}")
+                problems.append("source artifact build failed")
+        ok = not problems
+        return {"ok": ok, "kind": "dry_run" if ok else "dry_run_failed",
+                "message": "dry-run: all payloads validated" if ok else "dry-run found problems",
+                "problems": problems, "requests": reqs, "artifact": zip_meta,
+                "url": None, "logs": list(self._logs)}

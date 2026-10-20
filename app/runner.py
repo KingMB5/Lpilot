@@ -12,7 +12,6 @@ from agent.nodes import Deps
 from app.config import load_defaults
 from app.redact import SecretRegister, redact_obj
 from app.sessions import Session
-from deployers.mock import MockDeployer
 from inspector.core import scan_project
 from llm.client import RunBudget, get_client
 from llm.explain import explain as explain_text  # noqa: F401  (used by nodes)
@@ -40,6 +39,8 @@ def build_deps(session: Session) -> Deps:
     if session.register is None:
         session.register = register
         _collect_secrets(session, register)
+    if session.liara_token:
+        register.add(session.liara_token)  # token redacted everywhere, forever
     budget = session.budget or RunBudget(int(load_defaults().get("llm", {}).get("max_tokens_per_run", 60000)))
     if session.budget is None:
         session.budget = budget
@@ -49,7 +50,9 @@ def build_deps(session: Session) -> Deps:
         session.llm_name = client.name
         session.demo = demo or client.name.startswith(("fake", "cached(fake)"))
     if session.deployer is None:
-        session.deployer = MockDeployer()  # Phase 1: always mock; real deployer lands Thursday
+        from deployers import make_deployer
+
+        session.deployer = make_deployer(session)  # DEPLOYER=mock|liara_api|liara_cli (T13)
 
     def emit(etype: str, payload: dict) -> None:
         safe = redact_obj(payload, session.register)

@@ -152,7 +152,8 @@ def deploy(state: dict, deps: Deps) -> dict:
         return {"status": "cancelled"}
     deps.emit("stage", {"name": "deploy", "fa": "استقرار"})
     deps.emit("log", {"text": f"deployer={getattr(deps.deployer, 'name', '?')}"})
-    config = make_deploy_config(state.get("inspection", {}), state.get("plan", {}), state.get("approvals", {}))
+    config = make_deploy_config(state.get("inspection", {}), state.get("plan", {}),
+                                state.get("approvals", {}), project_dir=state.get("project_dir"))
     # never leak env VALUES: announce keys only
     deps.emit("log", {"text": "deploy env keys: " + (", ".join(sorted(config["env"])) or "(none)")})
     result = deps.deployer.deploy(config)

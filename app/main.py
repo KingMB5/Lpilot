@@ -145,7 +145,15 @@ def approve(sid: str, body: dict):
         "approved": bool(body.get("approved", False)),
         "cost_ok": bool(body.get("cost_ok", False)),
         "env_values": dict(body.get("env_values", {})),
+        "user_reply": str(body.get("user_reply", "")),  # answer to an ask_user interrupt (T14)
     }
+    token = str(body.get("liara_token") or "").strip()
+    if token:
+        # RAM only (AGENTS.md); registered as a secret so it can never leak into
+        # events, LLM prompts or logs. Never echoed back in the response.
+        s.liara_token = token
+        if s.register is not None:
+            s.register.add(token)
     if not runner_resume(s, payload):
         raise HTTPException(status_code=409, detail=f"cannot resume from status={s.status}")
     return JSONResponse({"ok": True}, status_code=202)

@@ -16,6 +16,14 @@ deploy:
   timeout_s: 600
   verify_timeout_s: 10
   verify_path: "/"
+  http_timeout_s: 30          # per-request timeout for the PaaS API
+  poll_interval_s: 5          # app-status polling while a deploy builds
+  max_retries: 3              # our policy for 429/5xx/timeout (NOT documented API behavior)
+  platform_values:            # VERIFIED: config fact liara_json_platform_values
+    [node, next, laravel, php, python, django, flask, dotnet, react, angular, vue, static, docker]
+  source_zip_exclude:         # never travel inside the uploaded artifact (.env = secrets)
+    [node_modules, .next, .git, __pycache__, .turbo, .cache, coverage, .vercel,
+     .env, .DS_Store, "*.pyc", "*.pyo", "*.log", "*.sqlite", "*.db"]
 
 security:
   # SDKs known/expected to depend on their original vendor environment.
@@ -92,15 +100,83 @@ verified_facts:
       before Thursday implementation.
     source: "https://developers.liara.ir/pass/deploy/deploy-sources-code.md"
     checked: "2026-10-20"
+  - id: paas_api_auth
+    fact: >-
+      PaaS OpenAPI spec (openapi 3.0.1) root security accepts jwt (apiKey named
+      Authorization in header) OR bearerAuth (http bearer, JWT format). We send
+      "Authorization: Bearer <token>". Base server: https://api.liara.ir
+    source: "https://developers.liara.ir/spec/paas.yaml"
+    checked: "2026-10-20"
+  - id: paas_api_endpoints
+    fact: >-
+      Exact request/response shapes from the spec —
+      POST /v1/projects  body {name, planID, platform, readOnlyRootFilesystem?, network?}
+        -> 200|400|401|409 (createApp; body schema declares NO required fields;
+        name/planID/platform are needed in practice).
+      GET /v1/projects/{name} -> {project: {project_id, type, status,
+        defaultSubdomain(bool), envs:[{key,value,encrypted}], planID, ...}} (getAppByName).
+      POST /v2/projects/{name}/sources  multipart/form-data, required field "file"
+        (binary) -> 200 {sourceID} (sourcesDeploy).
+      POST /v1/projects/update-envs  body {project, variables:[{key,value}]}
+        -> 200 {message} (updateEnvs).
+      POST /v1/projects/{name}/disks  body {name: string, size: string} -> 201
+        (createDisk; size is a STRING).
+      GET /v1/projects/{id}/disks -> {disks:[{_id,name,size,updatedAt,createdAt}],
+        mounts:[{name, mountedTo}]} (getDisks).
+      GET /v1/projects/{name}/logs?since=... -> array of {type, datetime, message}
+        (getAppLogs).
+    source: "https://developers.liara.ir/spec/paas.yaml"
+    checked: "2026-10-20"
+  - id: paas_api_error_codes
+    fact: >-
+      Declared error responses per endpoint are 400/401/404 (+409 on createApp);
+      429 and 5xx are NOT declared. Retry-with-backoff on 429/5xx/timeout is
+      LiaraPilot's own policy, not documented API behavior.
+    source: "https://developers.liara.ir/spec/paas.yaml"
+    checked: "2026-10-20"
 
 unverified_facts:
   - id: pricing
     fact: "All Liara plan/disk/egress prices"
     status: UNVERIFIED
+  - id: plan_id_values
+    fact: >-
+      Plan catalog IDs usable as createApp planID (e.g. g1/g2/h1...) are NOT in
+      the spec; LIARA_PLAN_ID env must be provided by the operator (console shows it)
+    status: UNVERIFIED
+  - id: disk_size_units
+    fact: >-
+      createDisk "size" is declared string but units (e.g. "1G" vs bytes) are not
+      specified; default from LIARA_DISK_SIZE env
+    status: UNVERIFIED
+  - id: app_status_strings
+    fact: >-
+      Possible values of project.status (polling matcher uses best-effort sets
+      running/ok/ready/... vs failed/error/...); to be confirmed on Thursday
+    status: UNVERIFIED
+  - id: default_subdomain_url
+    fact: >-
+      Live URL format assumed https://{app-name}.liara.run; not found in spec or
+      static docs pages (SPA). Verify Thursday from a real deploy/getAppByName
+    status: UNVERIFIED
+  - id: sources_deploy_semantics
+    fact: >-
+      Whether POST /v2/projects/{name}/sources triggers build+release and honors
+      liara.json (platform/port/disks) inside the uploaded zip (CLI presumably
+      does this); no explicit statement in spec
+    status: UNVERIFIED
+  - id: disk_mount_mechanism
+    fact: >-
+      API has no "attach disk" endpoint; mounting is assumed to happen at deploy
+      time from liara.json disks:[{name, mountTo}] (matches docs.liara.ir SQLite guide)
+    status: UNVERIFIED
+  - id: logs_since_format
+    fact: "Format of getAppLogs `since` query param (timestamp/date string)"
+    status: UNVERIFIED
   - id: deploy_sources_payload
     fact: >-
-      Exact request schema of POST /v2/projects/{name}/sources (multipart vs
-      tar, build triggers, streaming of build logs)
+      Superseded by paas_api_endpoints (multipart field "file" verified); build
+      log streaming during upload still unobserved
     status: UNVERIFIED
   - id: prisma_sqlite_on_liara
     fact: "Whether Prisma+SQLite works reliably on a mounted disk on Liara"
