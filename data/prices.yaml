@@ -1,0 +1,18 @@
+# Liara prices — RULE (AGENTS.md): NEVER invent prices or limits.
+# Every value below is the literal string UNVERIFIED until read from the
+# official pricing page (Thu, with Liara credits). Code must treat
+# "UNVERIFIED" as unknown and communicate that to the user.
+source_url: "https://www.liara.ir/pricing"
+checked: "UNVERIFIED"
+
+plans:
+  nano:      { monthly_usd: UNVERIFIED, ram_mb: UNVERIFIED, vcpu: UNVERIFIED }
+  micro:     { monthly_usd: UNVERIFIED, ram_mb: UNVERIFIED, vcpu: UNVERIFIED }
+  small:     { monthly_usd: UNVERIFIED, ram_mb: UNVERIFIED, vcpu: UNVERIFIED }
+  medium:    { monthly_usd: UNVERIFIED, ram_mb: UNVERIFIED, vcpu: UNVERIFIED }
+
+disk:
+  per_gb_monthly_usd: UNVERIFIED
+
+database:
+  postgres_small_monthly_usd: UNVERIFIED
