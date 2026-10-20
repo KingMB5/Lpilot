@@ -39,3 +39,29 @@ Stage Summary:
   parsing strategy must be proven in the Day-1 spike.
 - Next step (after Mehran's answers): Wed-night skeleton — FastAPI + StaticFiles
   frontend + FakeLLM + MockDeployer E2E, facts recorded in config with sources.
+
+---
+Task ID: 1 (audit + T1 amendment + T8 dispatch)
+Agent: Z.ai Code (lead build engineer)
+Task: Audit pre-existing T1 commit, verify Mehran's Liara claims, finalize API contract, dispatch T8 UI subagent.
+
+Work Log:
+- Audited repo: commit e957870 (T1 scaffold) existed from prior session; .venv deps already installed and pinned versions verified importable (fastapi 0.150.0, langgraph 1.2.16, openai 3.35.1).
+- Found half-finished T2 files (app/config.py OK, inspector/core.py missing rules.py) — T2 to be completed by me.
+- Verified on developers.liara.ir + docs.liara.ir (2026-10-20): OpenAPI HTTP API exists (POST /v2/projects/{name}/sources, GET /v1/projects/{name}/logs, POST /v1/projects/update-envs, disks endpoints, wss shell); liara.json platform values include "next" (Mehran was right); disks schema {"disks":[{"name","mountTo"}]}.
+- Recorded 4 new VERIFIED facts + 1 recommendation in config/defaults.yaml (commit c43ffb9).
+- LangGraph 1.2.16 interrupt round-trip probed successfully (invoke -> __interrupt__, Command(resume=...) resumes).
+
+Stage Summary:
+- API CONTRACT v1 (binding for app + web):
+  POST /api/upload (multipart "file") -> {session_id}
+  POST /api/sessions/demo {fixture} -> {session_id}
+  GET  /api/assessment -> {questions:[{id,text,options:[{value,label}]}], expert_skip:{value,label}}
+  POST /api/sessions/{id}/answers {answers, skip_expert} -> {level}
+  POST /api/sessions/{id}/start -> 202
+  GET  /api/sessions/{id} -> snapshot {id,demo,level,status,stage_fa,events:[{i,type,payload,ts}],plan,report,approval}
+  GET  /api/events/{id} (SSE, Last-Event-ID replay, heartbeat 15s)
+  POST /api/sessions/{id}/approve {approved,cost_ok,env_values} -> 202
+  POST /api/sessions/{id}/level {level} ; POST /api/sessions/{id}/cancel -> 202
+  SSE types: stage, log, risk, plan, approval_required, deploy_log, fix, verify, report, done, error, cancelled, level_changed
+- Deployer decision (Q5): pure-Python LiaraApiDeployer via HTTP API preferred; CLI stays fallback. Exact deploy payload schema still UNVERIFIED (check paas.yaml Thursday).
