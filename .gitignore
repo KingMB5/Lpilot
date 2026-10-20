@@ -64,3 +64,6 @@ liara-dev.log
 
 # but keep the example file
 !.env.example
+
+# runtime uploads (T12: demo artifacts never committed)
+data/uploads/
