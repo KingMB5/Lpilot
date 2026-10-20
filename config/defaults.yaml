@@ -178,6 +178,21 @@ unverified_facts:
       Superseded by paas_api_endpoints (multipart field "file" verified); build
       log streaming during upload still unobserved
     status: UNVERIFIED
+  - id: python_platform_build_run
+    fact: >-
+      How Liara's Python buildpack detects build/run commands for the agent's own
+      deploy (requirements.txt / Procfile / liara.json fields) — not in paas.yaml
+      or verified docs; agent ships liara.json {platform: python, port: 3000} +
+      requirements.txt + uvicorn run command
+    status: UNVERIFIED
+  - id: liara_json_healthcheck_field
+    fact: >-
+      Whether liara.json supports a healthCheck declaration and its schema;
+      agent exposes GET /api/health regardless
+    status: UNVERIFIED
+  - id: port_env_var
+    fact: "Whether Liara injects a PORT env var that the app must bind at runtime"
+    status: UNVERIFIED
   - id: prisma_sqlite_on_liara
     fact: "Whether Prisma+SQLite works reliably on a mounted disk on Liara"
     status: UNVERIFIED

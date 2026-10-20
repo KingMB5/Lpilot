@@ -1,0 +1,10 @@
+# LiaraPilot runtime dependencies — pinned to match pyproject.toml.
+# Used by the Python platform build on Liara (buildpack behavior UNVERIFIED —
+# see docs/DEPLOY_AGENT.md and config/defaults.yaml unverified_facts).
+fastapi==0.150.0
+uvicorn==0.54.0
+langgraph==1.2.16
+openai==3.35.1
+httpx==0.28.1
+pyyaml==6.0.3
+python-multipart==0.0.32

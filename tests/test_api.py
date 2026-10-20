@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import pathlib
 import time
 
 from fastapi.testclient import TestClient
@@ -123,3 +124,33 @@ def test_broken_project_escalates_via_api():
     snap = _poll(sid, "escalated", timeout=30)
     assert snap["report"]["status"] == "needs_user_decision"
     assert snap["report"]["fix_history"][-1]["attempt"] == 3
+
+
+# ---------------------------------------------------------------- T16: agent self-deploy readiness
+
+def test_health_endpoint_reports_config_state_without_secrets():
+    r = client.get("/api/health")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert isinstance(body["uptime_s"], int)
+    assert {"demo_mode", "deployer_default", "llm_configured", "dry_run"} <= set(body)
+    assert "token" not in json.dumps(body).lower().replace("liara_token_in_env", "")
+
+
+def test_agent_liara_json_uses_only_verified_fields():
+    spec = json.loads(pathlib.Path(__file__).resolve().parent.parent.joinpath("liara.json").read_text())
+    assert spec["platform"] == "python"          # VERIFIED platform value (liara_json_platform_values)
+    assert spec["port"] == 3000
+    assert set(spec) <= {"platform", "port"}     # nothing unverified shipped
+
+
+def test_requirements_file_matches_pyproject_pins():
+    root = pathlib.Path(__file__).resolve().parent.parent
+    reqs = {line.split("==")[0].strip(): line.split("==")[1].strip()
+            for line in (root / "requirements.txt").read_text().splitlines()
+            if "==" in line and not line.startswith("#")}
+    import tomllib
+    py = tomllib.loads((root / "pyproject.toml").read_text())["project"]["dependencies"]
+    pins = {d.split("==")[0]: d.split("==")[1] for d in py if "==" in d}
+    assert reqs == pins

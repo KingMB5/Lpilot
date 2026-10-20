@@ -183,3 +183,29 @@ Stage Summary:
   give_up escalates with reason, secret set_env rejected+never leaks, log tail redacted
   before the model, mock v2 scenarios + fixes, liara.json regeneration. Suite: 88 green.
 - Full agentic journey now possible offline: fail -> diagnose -> ask human -> fix -> deploy.
+
+---
+Task ID: T15
+Agent: Z.ai Code (lead build engineer)
+Task: Mid-run Q&A endpoint + UI input; one LLM call per question; FakeLLM demo answers.
+
+Work Log:
+- llm/ask.py: ASK_SYSTEM rules (glossary+state only, no invention, UNVERIFIED for prices,
+  never repeat secrets, level shapes length); deterministic Persian keyword matcher (15
+  concepts) -> glossary excerpt; fake_answer (beginner/expert text + state line, cost
+  questions carry UNVERIFIED, gibberish -> generic line); real path = ONE complete_text with
+  deterministic fallback on failure; answer redacted via SecretRegister (defense in depth).
+- app/main.py POST /api/sessions/{sid}/ask: 400 empty/>500 chars, 404 unknown; ask_lock
+  serializes (never parallel LLM calls); runner.ensure_llm() refactored out of build_deps so
+  questions work BEFORE the run starts; _state_summary carries env KEYS only + plan/status/
+  fix_attempts/url.
+- UI: ask-box form in the run screen (input 44px+ touch target, maxlength 500), Q/A pairs
+  rendered client-side in the timeline (textContent only — no HTML injection); answers never
+  enter SSE events; .ask-box/.ask-q/.ask-a CSS; node --check ok.
+- Tests (7): keyword matcher, ask-before-start glossary grounding, gibberish generic, cost
+  UNVERIFIED, validation+404, ask during AND after the run with fixture secret never leaking,
+  real-client path via redacting EchoLLM (exactly 1 call, prompt+answer masked).
+
+Stage Summary:
+- Suite: 95 green. API contract v1 extended with POST /api/sessions/{id}/ask -> {answer_fa}.
+- Demo mode: questions answered offline from data/concepts.json; no external calls.

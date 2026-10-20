@@ -10,6 +10,7 @@ import json
 import os
 import shutil
 import tempfile
+import time
 import zipfile
 import pathlib
 
@@ -49,9 +50,26 @@ def _get_session(sid: str) -> Session:
 
 # ---------------------------------------------------------------- health & data
 
+_PROCESS_START = time.time()
+
+
 @app.get("/api/health")
 def health():
-    return {"ok": True, "demo_mode": os.getenv("DEMO_MODE", "") == "1"}
+    """Healthcheck for the agent's own deployment (T16). No secrets here —
+    only booleans about configuration state."""
+    from deployers import make_deployer
+
+    return {
+        "ok": True,
+        "version": app.version,
+        "demo_mode": os.getenv("DEMO_MODE", "") == "1",
+        "deployer_default": os.getenv("DEPLOYER", "mock"),
+        "default_deployer": make_deployer().name if os.getenv("DEMO_MODE", "") != "1" else "mock",
+        "llm_configured": bool(os.getenv("LLM_BASE_URL") and os.getenv("LLM_API_KEY") and os.getenv("LLM_MODEL")),
+        "liara_token_in_env": bool(os.getenv("LIARA_API_TOKEN")),
+        "dry_run": os.getenv("LIARA_DRY_RUN", "") == "1",
+        "uptime_s": int(time.time() - _PROCESS_START),
+    }
 
 
 @app.get("/api/assessment")
