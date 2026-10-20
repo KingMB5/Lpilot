@@ -63,13 +63,44 @@ verified_facts:
       (Nuxt, Remix, Nitro, NestJS guides exist)
     source: "https://docs.liara.ir/paas/nodejs/getting-started/"
     checked: "2026-10-20"
+  - id: liara_json_platform_values
+    fact: >-
+      liara.json "platform" accepts exactly: node, next, laravel, php, python,
+      django, flask, dotnet, react, angular, vue, static, docker ("next" IS official);
+      wrong value aborts deploy. "port" field also supported.
+    source: "https://docs.liara.ir/paas/liarajson/"
+    checked: "2026-10-20"
+  - id: liara_json_disks_schema
+    fact: 'liara.json disks schema: {"disks":[{"name":"database","mountTo":"db"}]}'
+    source: "https://docs.liara.ir/paas/nodejs/how-tos/connect-to-db/sqlite/"
+    checked: "2026-10-20"
+  - id: liara_http_api
+    fact: >-
+      Documented OpenAPI HTTP API exists (base https://api.liara.ir, auth
+      "Authorization: Bearer $TOKEN", API keys from console menu "API").
+      Relevant endpoints: POST /v2/projects/{name}/sources (deploy source code),
+      GET /v1/projects/{name}/logs (app logs), POST /v1/projects/update-envs,
+      apps create/delete/restart/turn-on-off, disks create/resize, plus
+      wss://api.liara.ir?token=...&cmd=/bin/bash&project_id=... real-time shell.
+    source: "https://developers.liara.ir/llms.txt"
+    checked: "2026-10-20"
+  - id: deployer_recommendation
+    fact: >-
+      Pure-Python LiaraApiDeployer via the HTTP API is viable and preferred
+      (no Node runtime needed); LiaraCliDeployer stays as fallback. Deploy-sources
+      payload/auth details must be re-checked against the OpenAPI spec (paas.yaml)
+      before Thursday implementation.
+    source: "https://developers.liara.ir/pass/deploy/deploy-sources-code.md"
+    checked: "2026-10-20"
 
 unverified_facts:
   - id: pricing
     fact: "All Liara plan/disk/egress prices"
     status: UNVERIFIED
-  - id: deployer_http_api
-    fact: "Whether a documented Liara HTTP API can replace the CLI from Python"
+  - id: deploy_sources_payload
+    fact: >-
+      Exact request schema of POST /v2/projects/{name}/sources (multipart vs
+      tar, build triggers, streaming of build logs)
     status: UNVERIFIED
   - id: prisma_sqlite_on_liara
     fact: "Whether Prisma+SQLite works reliably on a mounted disk on Liara"
@@ -78,5 +109,7 @@ unverified_facts:
     fact: "liara deploy exit codes and machine-readable output for failure parsing"
     status: UNVERIFIED
   - id: cli_log_access
-    fact: "How to fetch application logs non-interactively after --detach deploy"
+    fact: >-
+      CLI log access: superseded by verified HTTP API GET /v1/projects/{name}/logs;
+      CLI flag still unverified
     status: UNVERIFIED
