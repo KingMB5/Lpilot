@@ -86,3 +86,27 @@ Stage Summary:
 - Contract elements implemented 1:1: POST /api/upload ("file"), POST /api/sessions/demo {fixture}, GET /api/assessment (questions + expert_skip), POST answers {answers, skip_expert} -> {level}, POST start -> 202, GET snapshot {id,demo,level,status,stage_fa,events[i,type,payload,ts],plan,report,approval}, SSE /api/events/{id} with Last-Event-ID-safe manual reconnect (10-attempt cap), POST approve {approved,cost_ok,env_values}, POST level, POST cancel; all 13 SSE types handled.
 - Lead must verify server-side assumptions: (1) SSE messages carry integer `id` matching snapshot event `i` (client dedupes on id <= max-i); (2) snapshot.status keyword values used for done/cancelled/approval heuristics are loose regexes (/done|success/, /cancel/, /approv/) — adjust if backend uses different status strings; (3) demo/upload responses may carry `demo:true` for the top-bar badge; (4) env_needed accepted as array of strings OR {key,value} objects; (5) report fields read defensively (url/steps/risks/decisions/estimated_cost/cost_unverified/learned/next_time + aliases).
 - Not done (by design): no server run, no backend changes, no session persistence across page reload (reload during a run re-hydrates via snapshot+SSE replay only if the user re-enters the same session — currently a fresh reload returns to screen A).
+
+---
+Task ID: 2 (Phase 1 build — T1 amendment, T2..T12)
+Agent: Z.ai Code (lead build engineer)
+Task: Execute Phase 1 T1-T12 per Mehran's updated brief; pytest green; mock E2E in browser.
+
+Work Log:
+- Audited prior session's T1 commit; verified langgraph 1.2.16 interrupt round-trip with a live probe before writing graph code.
+- Verified on docs.liara.ir + developers.liara.ir (2026-10-20): OpenAPI HTTP API (POST /v2/projects/{name}/sources, GET /v1/projects/{name}/logs, POST /v1/projects/update-envs, disks CRUD, wss shell), liara.json platform values incl. "next", disks schema {"disks":[{"name","mountTo"}]}. Recorded in config/defaults.yaml (commit c43ffb9).
+- T2 inspector/rules.py R1-R6 + fixed a StopIteration bug in core._port (listen(PORT) without literal); 12 tests.
+- T3 four fixtures + samples/fallback-app (plan B wired per official docs); acceptance locked in tests (next-prisma-sqlite yields R1,R2,R3,R4).
+- T4 15-concept Persian glossary; T5 4-question Persian assessment + pure scoring (experience gate + expert skip); T6 LLM layer (env-config OpenAI-compat, FakeLLM deterministic Persian explain, prices.yaml all-UNVERIFIED, SecretRegister redaction, RunBudget, demo cache, JSON schema-validate with 1 retry then deterministic fallback).
+- T7 LangGraph: 14 nodes, real interrupt approval gate, deterministic fix-loop cap (3) with escalation, teach_summary for beginners, MockDeployer canned failures (bad_port, missing_env_var), LiaraCliDeployer stub with verify-TODOs. DEBUG PROTOCOL exercised: found _decide() dropping node updates -> infinite loop (GraphRecursionError); one-line fix; tests green.
+- T8 FastAPI app (contract v1): upload/demo/assessment/answers/start/approve/level/cancel + SSE with Last-Event-ID replay + heartbeat; worker-thread graph runner; redacting emitter; T8 UI built by frontend-styling-expert subagent (web/index.html+app.js+style.css, dark RTL Persian, demo badge, level toggle, approval modal, expired-session screen).
+- T9 scripts/demo_mock.py (both levels, visibly different explanations, secrets-free reports); full pytest suite incl. API integration over TestClient.
+- T10 zipsafe (zip-slip/absolute paths/count/size limits), prompt-redaction test, no-execution test. T11 SSE replay + terminal guard, cancel-during-await, 404 session_expired contract, DEMO_MODE forcing. T12 demo mode verified offline; RTL-safe .ltr-block log rendering.
+- Sandbox quirk: root-level Python /app package shadows src/app in Next.js route detection (Next 404s on /). Product now serves the single exposed port directly (uvicorn on :3000); Caddyfile reverted untouched.
+- Browser E2E via agent-browser on the exposed port: beginner path (report + 5-item learned checklist), expert path (terse report), broken-project -> fix#1..#3 -> escalation screen, approval modal with env inputs, mobile 375px layout, sticky footer, demo badge; no console/page errors.
+
+Stage Summary:
+- 63 pytest tests green; demo script exit 0; commits T2..T12 + sandbox commit (one per task).
+- Acceptance met: next-prisma-sqlite yields R1-R4 with visibly different beginner/expert texts; approval gate blocks deploy; fix cap escalates after 3; no secrets in any emitted event.
+- Deployer decision for Thursday: pure-Python LiaraApiDeployer via verified HTTP API (preferred); CLI fallback. deploy-sources payload schema still UNVERIFIED -> check paas.yaml.
+- Still needs: Liara credits + real account (real deploy, prices fill), BoxAPI key (real LLM path), official docs re-check (deploy payload, CLI exit codes, releases/rollback).
