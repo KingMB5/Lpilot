@@ -145,3 +145,41 @@ Stage Summary:
   timeout, build_failed+logs, dry-run sends nothing + redacts + validates, token hygiene,
   zip exclusions, config merge priority, factory selection. Suite: 75 green.
 - Thursday runbook: set LIARA_DRY_RUN=1 -> inspect payload -> unset -> live.
+
+---
+Task ID: T14
+Agent: Z.ai Code (lead build engineer)
+Task: Agentic fix loop — LLM diagnoses, deterministic allowlist execution, ask_user pause, cap 3.
+
+Work Log:
+- llm/diagnose.py: DiagnosisModel (pydantic; action validator raises -> client retries once
+  -> fallback), ALLOWED_ACTIONS {set_env, change_port, change_start_command, add_disk,
+  change_platform, ask_user, give_up}, validate_params (secret-looking set_env with non-empty
+  value REJECTED -> must be ask_user; platform checked against VERIFIED liara.json values),
+  apply_action (mutates plan copy; liara.json regenerated from plan), deterministic_diagnosis
+  (scripted brain for FakeLLM + fallback: bad_port->change_port, missing_env_var->ask_user,
+  wrong_start_script->reads project for a sibling entry file, missing_disk_sqlite->add_disk,
+  unknown->give_up), build_diagnose_context (env KEYS only, log tail capped 2000 chars).
+- agent/nodes.fix rewritten: LLM diagnosis -> deterministic validation (reject -> scripted
+  fallback) -> apply -> emit fix event (set_env values ALWAYS masked); ask_user = LangGraph
+  interrupt {kind: question, question_fa}; reply fills first missing env key and is registered
+  as secret-capable; give_up -> escalate with diagnosis_fa (new AgentState.escalation_reason).
+- MockDeployer v2: wrong_start_script (entry file missing in project_dir, hint lists existing
+  entries) + missing_disk_sqlite (SQLite URL without disks) — both config-driven, no randomness.
+- plan.disks made deterministic: build_plan_deterministic sets disks for R1; make_plan
+  overrides disks like port/platform (real-LLM PlanModel dump would drop them — bug found by
+  test trace).
+- UI: approval modal renders question interrupts (question_fa + free-text input -> approve
+  {user_reply}); .question-text CSS; node --check ok.
+- main.approve: env values + liara_token registered in SecretRegister (values can never leak).
+- DEBUG PROTOCOL exercised 4x: (1) respx side_effect sequences (T13 leftover), (2) test stub
+  hijacked plan-building -> ScriptedLLM/CapturingClient now scope canned JSON to DiagnosisModel,
+  (3) missing escalation_reason channel (LangGraph TypedDict drops undeclared keys),
+  (4) leaky test double had empty logs() -> log_tail empty.
+
+Stage Summary:
+- 13 new tests (test_diagnose.py) + updated cap/bad-port/API tests: invalid action rejected,
+  cap enforced via 3 ask_user rounds then escalation, ask_user pauses+reply fills env,
+  give_up escalates with reason, secret set_env rejected+never leaks, log tail redacted
+  before the model, mock v2 scenarios + fixes, liara.json regeneration. Suite: 88 green.
+- Full agentic journey now possible offline: fail -> diagnose -> ask human -> fix -> deploy.

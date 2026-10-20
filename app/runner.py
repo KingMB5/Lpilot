@@ -32,7 +32,9 @@ STAGE_FA = {
 }
 
 
-def build_deps(session: Session) -> Deps:
+def ensure_llm(session: Session) -> None:
+    """Build register/budget/LLM once; used by the graph runner AND the Q&A
+    endpoint (T15) so questions work even before a run starts."""
     demo = session.demo or _demo_mode_env()
     concepts = _concepts()
     register = session.register or SecretRegister()
@@ -49,6 +51,11 @@ def build_deps(session: Session) -> Deps:
         session.llm = client
         session.llm_name = client.name
         session.demo = demo or client.name.startswith(("fake", "cached(fake)"))
+
+
+def build_deps(session: Session) -> Deps:
+    concepts = _concepts()
+    ensure_llm(session)
     if session.deployer is None:
         from deployers import make_deployer
 
@@ -154,3 +161,7 @@ def _concepts() -> dict:
     root = pathlib.Path(__file__).resolve().parent.parent
     data = json.loads((root / "data" / "concepts.json").read_text(encoding="utf-8"))
     return {c["key"]: c for c in data["concepts"]}
+
+
+# public alias — the Q&A endpoint (T15) loads the glossary through this
+load_concepts = _concepts

@@ -114,7 +114,8 @@
     snapshot: function (id) { return req('GET', '/api/sessions/' + encodeURIComponent(id)); },
     approve: function (id, body) { return req('POST', '/api/sessions/' + encodeURIComponent(id) + '/approve', body); },
     level: function (id, body) { return req('POST', '/api/sessions/' + encodeURIComponent(id) + '/level', body); },
-    cancel: function (id) { return req('POST', '/api/sessions/' + encodeURIComponent(id) + '/cancel'); }
+    cancel: function (id) { return req('POST', '/api/sessions/' + encodeURIComponent(id) + '/cancel'); },
+    ask: function (id, body) { return req('POST', '/api/sessions/' + encodeURIComponent(id) + '/ask', body); }
   };
 
   /* ----------------------------------------------------------
@@ -129,6 +130,7 @@
       var node = $('#screen-' + s);
       if (node) node.hidden = (s !== name);
     });
+    if (name === 'run') bindAsk();  // mid-run Q&A input (T15)
     window.scrollTo(0, 0);
   }
 
@@ -833,6 +835,63 @@
       btn.textContent = 'لغو عملیات';
       addNote('لغو عملیات ناموفق بود؛ دوباره تلاش کن.');
     });
+  }
+
+  /** Mid-run Q&A (T15): free question -> ONE llm call on the server -> Q/A pair
+   *  rendered in the timeline (client-side only; answers never enter SSE events). */
+  function bindAsk() {
+    var form = $('#ask-form');
+    if (!form || form.dataset.bound) return;
+    form.dataset.bound = '1';
+    form.addEventListener('submit', function (ev) {
+      ev.preventDefault();
+      var input = $('#ask-input');
+      var btn = $('#btn-ask');
+      var q = String(input.value || '').trim();
+      if (!q || !store.sessionId) return;
+      btn.disabled = true;
+      input.disabled = true;
+      btn.textContent = 'در حال پاسخ…';
+      addQA(q, null); // question first, answer appended on arrival
+      api.ask(store.sessionId, { question: q }).then(function (res) {
+        addQA(null, (res && res.answer_fa) ? res.answer_fa : '—');
+        input.value = '';
+      }).catch(function (e) {
+        if (!isExpired(e)) addQA(null, 'پاسخ گرفتن ناموفق بود؛ دوباره تلاش کن.');
+      }).finally(function () {
+        btn.disabled = false;
+        input.disabled = false;
+        btn.textContent = 'پرسیدن';
+        input.focus();
+      });
+    });
+  }
+
+  function addQA(question, answer) {
+    var tl = timelineEl();
+    if (!tl) return;
+    var li = el('li', 'tl-item tl-note');
+    if (question != null) {
+      var q = el('div', 'ask-q', '<span class="ask-badge">تو</span>');
+      var qText = document.createElement('span');
+      qText.textContent = question; // textContent: user input is never HTML
+      q.appendChild(qText);
+      li.appendChild(q);
+      li.dataset.pending = '1';
+      tl.appendChild(li);
+      tl.scrollTop = tl.scrollHeight;
+      return;
+    }
+    // answer: attach to the newest pending question, else standalone
+    var last = tl.querySelector('li[data-pending="1"]');
+    var target = last || li;
+    if (last) delete last.dataset.pending;
+    var a = el('div', 'ask-a', '<span class="ask-badge ask-badge-agent">خلبان</span>');
+    var aText = document.createElement('span');
+    aText.textContent = answer || '';
+    a.appendChild(aText);
+    target.appendChild(a);
+    tl.scrollTop = tl.scrollHeight;
   }
 
   /* ----------------------------------------------------------

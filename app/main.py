@@ -19,9 +19,10 @@ from fastapi.staticfiles import StaticFiles
 
 from agent.assessment import assess, load as load_assessment
 from app.config import load_defaults
-from app.runner import resume as runner_resume, start as runner_start
+from app.runner import ensure_llm, load_concepts, resume as runner_resume, start as runner_start
 from app.sessions import STORE, Session
 from app.zipsafe import ZipSafetyError, extract_zip, project_root_of
+from llm.ask import answer_question
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 UPLOAD_ROOT = ROOT / "data" / "uploads"
@@ -179,6 +180,47 @@ def cancel(sid: str):
         s.status = "cancelled"
         s.add_event("cancelled", {})
     return JSONResponse({"ok": True}, status_code=202)
+
+
+# ---------------------------------------------------------------- mid-run Q&A (T15)
+
+@app.post("/api/sessions/{sid}/ask")
+def ask(sid: str, body: dict):
+    """Free question -> ONE LLM call grounded in glossary + state, redacted.
+    Works in any session phase (before/during/after the run)."""
+    s = _get_session(sid)
+    question = str(body.get("question", "")).strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="question is empty")
+    if len(question) > 500:
+        raise HTTPException(status_code=400, detail="question too long (max 500 chars)")
+    with s.ask_lock:  # serialize: one LLM call per question, never parallel
+        ensure_llm(s)
+        answer = answer_question(s.llm, s.register, s.level or "beginner",
+                                 question, _state_summary(s), load_concepts())
+    return {"answer_fa": answer}
+
+
+def _state_summary(s: Session) -> dict:
+    plan = s.plan or {}
+    attempts = 0
+    try:
+        if s.graph is not None and s.thread_cfg:
+            attempts = int((s.graph.get_state(s.thread_cfg).values or {}).get("fix_attempts", 0))
+    except Exception:
+        attempts = 0
+    return {
+        "status": s.status,
+        "stage_fa": s.stage_fa,
+        "level": s.level,
+        "plan": {"port": plan.get("port"), "platform": plan.get("platform"),
+                 "env_needed": list(plan.get("env_needed") or []),
+                 "disks": [d.get("name") for d in (plan.get("disks") or [])]},
+        "fix_attempts": attempts,
+        "url": (s.report or {}).get("url"),
+        "deployer": getattr(s.deployer, "name", None),
+        "llm": s.llm_name,
+    }
 
 
 # ---------------------------------------------------------------- SSE
