@@ -209,3 +209,67 @@ Work Log:
 Stage Summary:
 - Suite: 95 green. API contract v1 extended with POST /api/sessions/{id}/ask -> {answer_fa}.
 - Demo mode: questions answered offline from data/concepts.json; no external calls.
+
+---
+Task ID: T16
+Agent: Z.ai Code (lead build engineer)
+Task: Make the agent itself deployable on Liara (ready, NOT deployed).
+
+Work Log:
+- liara.json at repo root: {"platform": "python", "port": 3000} — VERIFIED platform value
+  only; requirements.txt pinned == pyproject pins (tested for equality).
+- /api/health extended: ok, version, demo_mode, deployer_default, llm_configured,
+  liara_token_in_env (boolean only), dry_run, uptime_s — no secret values.
+- docs/DEPLOY_AGENT.md: artifact table, run command, required-env table, UNVERIFIED items
+  (python buildpack build/run detection, liara.json healthCheck field, PORT env, python
+  version), Thursday runbook (dry-run first).
+- config/defaults.yaml: +3 unverified facts (python_platform_build_run,
+  liara_json_healthcheck_field, port_env_var).
+- Tests: health state w/o secrets, liara.json only-verified-fields, requirements==pyproject.
+
+Stage Summary:
+- Agent deployable in one command after Thursday's spike; nothing unverified shipped in
+  liara.json. Suite: 98 green.
+
+---
+Task ID: T17
+Agent: Z.ai Code (lead build engineer)
+Task: Demo assets — 3-minute Persian demo script + bilingual README.
+
+Work Log:
+- docs/DEMO_SCRIPT.md: 6 timed scenes (intro, beginner run on the perfume store, approval
+  gate, failure + self-fix with ask_user, mid-run Q&A, final report + expert mode), the three
+  demo-safety modes (live / pre-deployed URL / DEMO_MODE=1 offline), narration text with the
+  teaching beats (disk analogy, UNVERIFIED badge, redaction), and a demo-day checklist.
+- README.md: English (what/architecture ASCII/quickstart/tests/security/going-live + pointer
+  to DEPLOY_AGENT + DEMO_SCRIPT) and a compact Persian summary section.
+
+Stage Summary:
+- Phase 2 (T13-T17) complete: 5 commits, suite 98 green. Final self-verification + report next.
+
+---
+Task ID: VERIFY (Phase 2 final self-verification)
+Agent: Z.ai Code (lead build engineer)
+Task: Browser E2E verification of Phase 2 features + final report inputs.
+
+Work Log:
+- Sandbox had restarted the Next.js dev server on :3000 (404s); killed it and started the
+  product (uvicorn app.main:app, DEMO_MODE=1, --ws none to silence gateway WS probes) as in
+  Phase 1. /api/health returns the T16 fields; UI 200.
+- agent-browser E2E: perfume-store beginner run end-to-end (assessment -> risk explanations ->
+  approval modal with env inputs -> report with UNVERIFIED cost + 5-item learned checklist).
+- T14 verified in-browser: broken-project -> approval -> deploy fail -> QUESTION MODAL
+  («خلبان یک سؤال دارد») -> reply MISSING_TOKEN -> second question -> reply PORT -> deploy
+  success -> report «موفق». The full agentic journey (fail -> diagnose -> ask human -> fix)
+  works through the UI.
+- T15 verified in-browser: ask-box visible on the run screen; question «پورت چیست؟» -> one
+  FakeLLM call -> glossary answer + state line rendered as a Q/A pair in the timeline.
+- Layout: mobile 375px screenshot clean (RTL intact, no horizontal overflow); footer sticks to
+  the bottom on the short upload screen and is pushed down naturally on long screens; no
+  console/page errors during the whole session.
+- Final suite: 98 passed.
+
+Stage Summary:
+- Phase 2 (T13-T17) complete and browser-verified; 5 commits (T13/T14/T15/T16/T17).
+- Thursday ready: LIARA_DRY_RUN=1 -> inspect payloads -> live. UNVERIFIED list consolidated
+  in config/defaults.yaml + docs/DEPLOY_AGENT.md.
