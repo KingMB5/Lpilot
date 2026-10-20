@@ -193,6 +193,8 @@ async def events(sid: str, request: Request):
                 pos = e["i"]
                 if e["type"] in ("done", "cancelled"):
                     return
+            if pos >= s.seq() and s.terminal():
+                return  # reconnect after the run ended: nothing left to replay
             await asyncio.sleep(0.25)
             idle += 0.25
             if idle >= 15:

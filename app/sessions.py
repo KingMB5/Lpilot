@@ -61,6 +61,13 @@ class Session:
         with self._cond:
             return [e for e in self.events if e["i"] > last_i]
 
+    def seq(self) -> int:
+        with self._cond:
+            return self._seq
+
+    def terminal(self) -> bool:
+        return self.status in ("done", "escalated", "cancelled", "error")
+
     def acquire_run(self) -> bool:
         return self._lock.acquire(blocking=False)
 
