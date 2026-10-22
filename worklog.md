@@ -448,3 +448,26 @@ Stage Summary:
 - UI: premium dark Mission-Control theme live in web/ (no build step, no external resources, offline-safe).
 - Real LLM: zero-config with a BoxAPI key — cp .env.example .env, fill LLM_API_KEY, DEMO_MODE=0.
 - Delivery: https://x0.at/OGiG.zip (v0.1.0, 4 launchers + all Phase-4 changes).
+
+---
+Task ID: 5 (Phase 5 — real run + repo hardening)
+Agent: Z.ai Code (main)
+Task: A real run with the operator-provided Liara token; repo hardening; demo script.
+
+Work Log:
+- Token received in chat; used ONLY via env vars in shell commands — never written to any repo file, log, or the zip; flagged rotation advice.
+- A1 live_check: default dry-run PASS (tier-1 GET /v1/projects 200, 0 apps); --live tier-2 FAIL create_app http 402 "Not enough balance." — downstream 400/404 project_not_found. All rows with raw evidence appended to docs/VERIFIED_MATRIX.md.
+- Root-caused 402 via documented GET /v1/billing (200): balance 0. Credit voucher not redeemed / wrong account — ONLY the operator can fix.
+- planIDs learned from the live API's own 400 validation message (ir-small smallest); GET /v1/plans 404 (no catalog) — recorded.
+- A2 re-audit: 8 docs-only facts DOWNGRADED to UNVERIFIED (rule: real call or paas.yaml only); boxapi fact split (endpoint reachable 401-verified / model gpt-6-astra unverified until first real call); 4 new real-call VERIFIED facts added (billing, plan_ids_real, create_app_402_zero_balance, plans_catalog_absent).
+- A4-code: app/ratelimit.py per-IP + global sliding-window limiter (off by default, /api/health exempt, RAM-swept), wired into app.main; 6 tests; defaults documented in .env.example. Liara deploy of the agent BLOCKED by balance=0.
+- B5: SECURITY.md (threat model, secret handling, tiers, limits); .env* ignored, only examples tracked.
+- B6: gitleaks 8.24.3 — no leaks in tree AND all 40 commits; bandit — no issues; pip-audit — no known vulns.
+- B7: pyflakes dead-code sweep (unused imports/locals removed; one intentional noqa re-export kept); README additions; fresh `git clone` -> 140 passed; tool-results/ untracked + ignored.
+- C8: docs/DEMO_SCRIPT.md rewritten to ~5 min per official rule, real-run spine (live_check scene), broken-project as the money scene, cleanup scene; fixed leaked CJK char.
+- Suite: 140 passed. Commits: ecb241c, 14d64a2.
+
+Stage Summary:
+- BLOCKED on operator: account balance=0 -> no app creation/deploy possible (A3, A4-deploy). Unblock: redeem credit on THIS account, then `LIARA_PLAN_ID=ir-small ... live_check.py --live` + real scenario + agent deploy (runbook ready).
+- Also needed for the "real LLM" scenario: BoxAPI key on the operator's side (sandbox never holds it).
+- Security posture: no secrets in repo/history/package (verified by gitleaks); rate limiting ready for public URL.
