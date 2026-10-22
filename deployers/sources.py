@@ -82,7 +82,8 @@ def build_source_zip(project_dir: str, prepared_files: list[dict] | None = None,
         raise ValueError("source archive would be empty — nothing to deploy")
 
     buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w:gz", compresslevel=9) as tf:
+    with tarfile.open(fileobj=buf, mode="w:gz", compresslevel=9,
+                      format=tarfile.GNU_FORMAT) as tf:
         for name, data in members:
             info = tarfile.TarInfo(name=name)
             info.size = len(data)
