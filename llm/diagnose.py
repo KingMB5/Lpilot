@@ -235,6 +235,23 @@ def _start_command_of(state: dict) -> str:
     return str(plan.get("start_command") or inspection.get("start_command") or "").strip()
 
 
+def _resolve_run_script(start: str, project_dir: str | None) -> str:
+    """Resolve `npm/yarn/pnpm [run] <script>` to the underlying command by
+    reading package.json (never executes anything). One level deep — the
+    inspector reports 'npm run start' while Liara actually runs the script."""
+    m = re.match(r"^(?:npm|yarn|pnpm)\s+(?:run\s+)?(\S+)$", start.strip())
+    if not m or not project_dir:
+        return start
+    try:
+        pkg = json.loads((pathlib.Path(project_dir) / "package.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return start
+    script = str(m.group(1))
+    cmd = ((pkg.get("scripts") or {}).get(script)
+           or (pkg.get("scripts") or {}).get("start") or "").strip()
+    return cmd or start
+
+
 def _start_candidate(state: dict) -> str | None:
     """Read the project (never executes it): find a root entry file that exists
     and is not the one that just failed. Returns 'node <file>' or None."""
@@ -242,6 +259,7 @@ def _start_candidate(state: dict) -> str | None:
     start = _start_command_of(state)
     if not project_dir or not start:
         return None
+    start = _resolve_run_script(start, project_dir)
     m = _ENTRY_RE.match(start)
     if not m:
         return None

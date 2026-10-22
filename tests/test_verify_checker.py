@@ -140,3 +140,22 @@ def test_deploy_config_keeps_package_json_when_start_matches(tmp_path):
                                                     "start_command": "node server.js"},
                              {}, project_dir=str(tmp_path))
     assert not [f for f in cfg["prepared_files"] if f["name"] == "package.json"]
+
+
+def test_run_script_resolution_feeds_the_start_file_check(tmp_path):
+    """The inspector reports 'npm run start'; Liara runs the package.json
+    script. The start-file check must resolve that indirection (real scene
+    2026-10-22: npm run start -> node missing-entry.js -> 502)."""
+    import json as _json
+
+    from llm.diagnose import deterministic_diagnosis
+
+    (tmp_path / "package.json").write_text(_json.dumps(
+        {"scripts": {"start": "node missing-entry.js"},
+         "dependencies": {"express": "^4.19.0"}}), encoding="utf-8")
+    (tmp_path / "server.js").write_text("console.log(1)", encoding="utf-8")
+    state = {"project_dir": str(tmp_path),
+             "plan": {}, "inspection": {"start_command": "npm run start"}}
+    det = deterministic_diagnosis("unhealthy_url", state)
+    assert det["action"] == "change_start_command"
+    assert det["params"]["start_command"] == "node server.js"
