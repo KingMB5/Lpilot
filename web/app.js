@@ -552,6 +552,7 @@
 
   function rStage(p) {
     if (p.fa) $('#stage-title').textContent = p.fa;
+    syncStepper(p.name); // presentational pipeline stepper (task 4-a)
     var li = tlItem('tl-stage', 'dot-amber');
     var box = el('div', 'stage-box');
     box.appendChild(el('span', 'stage-fa', esc(p.fa || p.name || '')));
@@ -563,7 +564,7 @@
 
   function rLog(p) {
     var li = tlItem('tl-log', '');
-    var line = el('div', 'log-line ltr-block');
+    var line = el('div', 'log-line ltr-block' + logLevelCls(p.text));
     line.textContent = (p.text != null) ? String(p.text) : '';
     li.appendChild(line);
     timelineEl().appendChild(li);
@@ -572,7 +573,7 @@
 
   function rDeployLog(p) {
     var list = ensureDeployGroup();
-    var row = el('li', 'log-line deploy-line ltr-block');
+    var row = el('li', 'log-line deploy-line ltr-block' + logLevelCls(p.text));
     row.textContent = (p.text != null) ? String(p.text) : '';
     list.appendChild(row);
     scrollTimeline();
@@ -607,7 +608,7 @@
 
     var li = tlItem('tl-card', sev.dotCls);
     if (riskId) li.dataset.riskId = riskId;
-    var card = el('div', 'card risk-card');
+    var card = el('div', 'card risk-card' + (p.severity ? ' sev-' + p.severity : ''));
 
     var head = el('div', 'risk-head');
     head.appendChild(el('span', 'badge ' + sev.badgeCls, sev.label));
@@ -703,10 +704,12 @@
 
   function rApproval(p) {
     addNote('خلبان برای ادامه نیاز به تأیید تو دارد.');
+    setStep(3); // stepper: تأیید
     openApprovalModal(p);
   }
 
   function rFix(p) {
+    setStep(5); // stepper: اصلاح
     var li = tlItem('tl-card', 'dot-amber');
     var card = el('div', 'card fix-card');
     var attempt = (p.attempt != null) ? faDigits(p.attempt) : '؟';
@@ -738,7 +741,7 @@
     scrollTimeline();
   }
 
-  var TIER_BADGE_CLS = { auto: 'badge-zinc', approval: 'badge-amber', forbidden: 'badge-red' };
+  var TIER_BADGE_CLS = { auto: 'badge-emerald', approval: 'badge-amber', forbidden: 'badge-red' };
 
   function tierBadge(rt) {
     var cls = TIER_BADGE_CLS[rt.tier] || 'badge-zinc';
@@ -800,6 +803,7 @@
   }
 
   function rVerify(p) {
+    setStep(6); // stepper: صحت‌سنجی
     var ok = !!p.ok;
     var li = tlItem('tl-card', ok ? 'dot-emerald' : 'dot-red');
     var card = el('div', 'card verify-card ' + (ok ? 'verify-ok' : 'verify-fail'));
@@ -824,12 +828,14 @@
 
   function rDone() {
     stopSSE();
+    completeStepper(); // stepper: all stages done
     disableInputs(true);
     addNote('کار تمام شد.');
     goReport();
   }
 
   function rError(p) {
+    errorStepper(); // stepper: rose error state on the active stage
     var li = tlItem('tl-error', 'dot-red');
     var card = el('div', 'card error-card');
     card.appendChild(el('span', 'error-label', 'خطا'));
@@ -872,6 +878,81 @@
     ops_denied: rOpsDenied,
     monitor_alert: rMonitorAlert
   };
+
+  /* ----------------------------------------------------------
+   * Presentational helpers (task 4-a) — no state, no behavior.
+   * 1) Pipeline stepper: maps server stage names onto the static
+   *    #stepper markup (done / active / error classes only).
+   * 2) Log-level tinting: purely cosmetic class on log lines.
+   * ---------------------------------------------------------- */
+
+  var STAGE_TO_STEP = {
+    assess: 0,
+    inspect: 1,
+    explain_risks: 2,
+    make_plan: 3,
+    prepare_files: 3,
+    deploy: 4,
+    read_logs: 5,
+    verify: 6,
+    teach_summary: 7,
+    escalate: 3
+  };
+
+  var stepperEl = null;
+  var stepEls = [];
+
+  function initStepper() {
+    stepperEl = $('#stepper');
+    if (!stepperEl) return;
+    stepEls = [];
+    var nodes = stepperEl.querySelectorAll('.step');
+    for (var i = 0; i < nodes.length; i++) stepEls.push(nodes[i]);
+  }
+
+  function setStep(idx) {
+    if (!stepEls.length) return;
+    for (var i = 0; i < stepEls.length; i++) {
+      var li = stepEls[i];
+      li.classList.toggle('done', i < idx);
+      li.classList.toggle('active', i === idx);
+      li.classList.remove('error');
+      if (i === idx) li.setAttribute('aria-current', 'step');
+      else li.removeAttribute('aria-current');
+    }
+    if (stepperEl) stepperEl.classList.remove('complete');
+  }
+
+  function syncStepper(stageName) {
+    if (stageName == null) return;
+    var idx = STAGE_TO_STEP[String(stageName)];
+    if (idx != null) setStep(idx);
+  }
+
+  function completeStepper() {
+    if (!stepEls.length) return;
+    for (var i = 0; i < stepEls.length; i++) {
+      stepEls[i].classList.remove('active', 'error');
+      stepEls[i].classList.add('done');
+      stepEls[i].removeAttribute('aria-current');
+    }
+    if (stepperEl) stepperEl.classList.add('complete');
+  }
+
+  function errorStepper() {
+    if (!stepEls.length) return;
+    for (var i = 0; i < stepEls.length; i++) {
+      if (stepEls[i].classList.contains('active')) stepEls[i].classList.add('error');
+    }
+  }
+
+  function logLevelCls(text) {
+    var t = String(text == null ? '' : text).toLowerCase();
+    if (/error|fail|fatal|exception|traceback|refused|denied|crash|✗|✘/.test(t)) return ' log-err';
+    if (/warn|deprecat|fallback|retry|unverified|skip|not found|not verified|escalat/.test(t)) return ' log-warn';
+    if (/(^|\W)(ok|success|passed|healthy|live|done)(\W|$)|✓|200 ok/.test(t)) return ' log-ok';
+    return '';
+  }
 
   /* ----------------------------------------------------------
    * Run screen controls: level toggle + cancel
@@ -1036,8 +1117,10 @@
     store.pendingApproval = p;
     var modal = $('#modal');
     modal.innerHTML = '';
+    modal.classList.remove('is-approval', 'is-question', 'is-ops');
 
     var isQuestion = p.kind === 'question';
+    modal.classList.add(isQuestion ? 'is-question' : 'is-approval');
 
     var title = el('h3', 'modal-title', isQuestion ? 'خلبان یک سؤال دارد' : 'نیاز به تأیید تو');
     title.id = 'modal-title';
@@ -1129,8 +1212,11 @@
     okBtn.disabled = true;
     noBtn.disabled = true;
     okBtn.textContent = 'در حال ارسال پاسخ…';
+    var replied = store.pendingApproval; // the question this reply answers
     api.approve(store.sessionId, { approved: true, user_reply: text }).then(function () {
-      closeModal();
+      // The server may resume the graph before this POST resolves; if the NEXT
+      // interrupt already re-opened the modal, keep it instead of closing it.
+      if (!store.pendingApproval || store.pendingApproval === replied) closeModal();
       addNote('پاسخ تو به خلبان رسید؛ ادامه‌ی اصلاح…');
     }).catch(function (err) {
       okBtn.disabled = false;
@@ -1183,6 +1269,7 @@
   function closeModal() {
     $('#modal-overlay').hidden = true;
     $('#modal').innerHTML = '';
+    $('#modal').classList.remove('is-approval', 'is-question', 'is-ops');
     store.pendingApproval = null;
   }
 
@@ -1340,6 +1427,8 @@
   function openOpsApprovalModal(action) {
     var modal = $('#modal');
     modal.innerHTML = '';
+    modal.classList.remove('is-approval', 'is-question', 'is-ops');
+    modal.classList.add('is-ops');
     var title = el('h3', 'modal-title', 'اقدام سطح ۲ — نیازمند تأیید تو');
     title.id = 'modal-title';
     modal.appendChild(title);
@@ -1523,6 +1612,7 @@
   function init() {
     wireUpload();
     wireModalTrap();
+    initStepper();
 
     $('#btn-expert-skip').addEventListener('click', function () { submitAnswers(true); });
     $('#btn-start').addEventListener('click', function () { submitAnswers(false); });

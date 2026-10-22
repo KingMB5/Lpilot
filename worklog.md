@@ -367,3 +367,67 @@ Work Log:
 Stage Summary:
 - Windows users: double-click run_demo.bat, or $env:DEMO_MODE="1"; python -m uvicorn app.main:app --port 3000.
 - Fresh download link (v0.1.0 with launchers): https://x0.at/zi8G.zip
+
+---
+Task ID: 4-a
+Agent: frontend-styling-expert (sub-agent)
+Task: Premium "Mission Control" redesign of web/ (vanilla HTML+CSS, no build step).
+Trigger: user feedback «از نظر بصری اصلا زیبایی و چیزی درست نکردی» — the UI must look
+award-worthy for the demo video while preserving 100% of app.js behavior.
+
+Work Log:
+- Hook inventory re-verified before styling: every id/selector app.js reads
+  (#screen-*, #demo-badge, #dropzone/#dz-*, #file-input, #upload-error, .chip[data-fixture],
+  #questions, #btn-expert-skip, #btn-start, #assess-hint, #assess-error, #stage-title, #stepper/.step,
+  #btn-cancel, #lvl-*, #ask-form/#ask-input/#btn-ask, #timeline, #modal-overlay/#modal,
+  #report-root, #monitor-box, #btn-new, #btn-restart) plus all dynamically created classes
+  (tl-*, dot-*, stage-*, log-*, deploy-line, risk-card/sev-*, plan-*, fix-*, cause-*, tier-badge,
+  ops-*, verify-*, monitor-*, report-status/st-*, ask-*, modal-*, env-*, file-*, checklist,
+  learned-card/next-card…) kept under the SAME names; app.js untouched this session.
+- index.html (additive only): rocket logo mark (inline SVG) in topbar + matching emerald
+  favicon; hero eyebrow pill «چالش لیارا • خلبان استقرار با هوش مصنوعی»; per-fixture inline SVG
+  icons on the 4 demo chips (bag/server/code/bug — broken-project gets rose styling).
+- style.css refinement pass (targets found via VLM screenshot reviews, baseline 6.5–7.5/10):
+  global depth layer (blueprint dot-grid + top sheen via body::before, film-grain via html::before,
+  both fixed + pointer-events none); brighter text tokens for contrast; sticky topbar with emerald
+  sheen + saturate blur; glowing gradient brand mark; hero radial glow + clamp() title; dropzone
+  upgraded to "slot" look (gradient ring via mask-composite around the dashed border, blueprint
+  grid inside, floating 72px squircle icon); chip hover glow + icon color transitions; feature
+  strip hover lift + icon glow; stepper now sits in a glass panel with gradient top hairline,
+  squircle icons, SVG-checkmark done state, gradient-filled connectors, live amber dot on the
+  stage title (freezes emerald when #stepper.complete via :has()); terminal deploy group got
+  traffic-dot title bar; severity badges on risk cards now carry masked SVG icons
+  (warning/circle-alert/info) + per-severity tinted radial backgrounds; approval modal made
+  unmissable: amber border + glow shadow, sticky glowing top edge (scroll-safe), code-token env
+  keys (mono, LTR), de-emphasized ghost cancel, amber-tinted cost/summary row, violet variant
+  for question modals; monitor history bars taller + pulsing سالم badge; report URL box upgraded
+  to glowing "live link" card; footer anchored with gradient hairline; missing @keyframes
+  dot-pulse defined (was referenced but never declared — demo-badge dot was static).
+- Bug found & fixed during verification: my first html::before data-URI was written without its
+  closing quote → one unbalanced brace silently killed ALL rules below it (topbar/brand unstyled);
+  caught by computed-style probe + brace-balance script, fixed, re-validated (0 unclosed blocks).
+- Modal ring pseudo removed in favor of a real border: the ::after gradient ring was anchored to
+  the scroll container's client box, so it would detach from the bottom edge on tall scrollable
+  dialogs; sticky top edge + 1px amber border survives scrolling.
+- Browser verification (agent-browser, DEMO_MODE=1 :3010): zero console errors, zero page errors
+  across all runs. Golden path E2E: «فروشگاه عطر» → 4 assessment answers → run → risk cards →
+  tier-2 modal (env values) → تأیید و استقرار → deploy console → report (موفق, live URL, tier
+  legend, monitor سالم/استنتاج). Second run «پروژه خراب» via expert-skip → approval → self-fix
+  flow → success report; tier-2 restart ops from the report screen → «انجام شد» in ops panel.
+  Layout checks: 375px NO horizontal scroll (upload/report/modal), 1280px clean; stepper states
+  verified live (active=1 done=3 during inspect stage). VLM screenshot ratings after iteration:
+  upload 9/10, run timeline 9/10, modal 9/10 CLEAN, report 9/10 CLEAN, mobile 9/10.
+- pytest: 134 passed (unchanged; no backend/JS behavior touched).
+
+Stage Summary:
+- Files changed this session: web/index.html (+~12 lines, additive), web/style.css (refined
+  ~1900-line total; every app.js class still styled under its original name). web/app.js NOT
+  modified in this session (stepper/log-level/severity hooks from the earlier working-tree pass
+  are kept and now fully styled).
+- Design language: near-black layered bg (#0a0e13/#12161d/#181d26) + emerald→teal primary,
+  violet reserved for AI/question moments, amber for approval/warnings, rose for danger; glass
+  cards with masked gradient borders; 150–250ms transitions; all animations disabled under
+  prefers-reduced-motion; focus-visible rings + ≥44px touch targets kept.
+- Not changed (known risks, out of scope): UNVERIFIED source badge text is long on 375px
+  (wraps, no overflow); monitor poll interval fixed 15s; modal password fields are plain text
+  inputs (no visibility toggle) — all pre-existing behaviors, intentionally untouched.

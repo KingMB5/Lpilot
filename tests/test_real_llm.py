@@ -66,7 +66,7 @@ def test_boxapi_defaults_applied_when_base_or_model_missing(monkeypatch):
     reg, bud = SecretRegister(), RunBudget(10_000)
     c = OpenAICompatClient(reg, bud)  # constructor makes NO network call
     assert c.base_url == DEFAULT_LLM_BASE_URL == "https://ai.boxapi.ir/ai/v1"
-    assert c.model == DEFAULT_LLM_MODEL == "gpt-5.4-mini"
+    assert c.model == DEFAULT_LLM_MODEL == "gpt-6-astra"
     assert c.calls == 0
 
 
@@ -114,7 +114,7 @@ def test_call_cap_and_call_log(monkeypatch, caplog):
         c.complete_text("system three", "user three")
     assert c.calls == 2
     assert len(c.call_log) == 2
-    assert all(line.startswith("call#") and "model=gpt-5.4-mini" in line for line in c.call_log)
+    assert all(line.startswith("call#") and "model=gpt-6-astra" in line for line in c.call_log)
     assert SECRET not in json.dumps(c.call_log)
     with caplog.at_level(logging.INFO, logger="liarapilot.llm"):
         pass

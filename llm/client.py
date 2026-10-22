@@ -25,7 +25,9 @@ FALLBACK_NOTICE = "(deterministic fallback — LLM output unusable)"
 # BoxAPI defaults (operator-provided, NOT secrets). A different provider is one
 # env change away; only LLM_API_KEY is genuinely required for the real client.
 DEFAULT_LLM_BASE_URL = "https://ai.boxapi.ir/ai/v1"
-DEFAULT_LLM_MODEL = "gpt-5.4-mini"
+# gpt-6-astra is the model named in the BoxAPI starcoach challenge sample code;
+# any model visible in the BoxAPI dashboard works via LLM_MODEL.
+DEFAULT_LLM_MODEL = "gpt-6-astra"
 
 _log = logging.getLogger("liarapilot.llm")
 

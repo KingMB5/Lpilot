@@ -61,6 +61,24 @@ verified_facts:
       --team-id, --liara-json
     source: "https://docs.liara.ir/references/cli/deploy-app/"
     checked: "2026-10-20"
+  - id: boxapi_llm_endpoint
+    fact: >-
+      BoxAPI starcoach LLM endpoint is OpenAI-compatible: base_url
+      https://ai.boxapi.ir/ai/v1 with the official OpenAI SDK; sample model in
+      the challenge brief is gpt-6-astra. Docs page (boxapi.ir/starcoach) is
+      behind login; the brief's sample code is the source.
+    source: "challenge brief sample code provided by operator (Mehran), 2026-10-22"
+    checked: 2026-10-22
+  - id: liara_cli_ops_surface
+    fact: >-
+      Liara CLI documented surface covers: app create/delete/list, deploy,
+      start/stop, restart, logs, env var get/set/delete, disks, databases,
+      domains, accounts — the same operation families LiaraApiDeployer uses via
+      the HTTP API (the CLI is a client of api.liara.ir). Confirms our deployer
+      op-set is real-platform backed; HTTP endpoints themselves verified in
+      config/spec/paas.yaml.
+    source: "https://docs.liara.ir/references/cli/about/ (sidebar + intro)"
+    checked: 2026-10-22
   - id: node_sqlite_needs_disk
     fact: >-
       SQLite on Liara Node.js apps requires creating a disk and mounting it via
