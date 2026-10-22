@@ -184,6 +184,45 @@ verified_facts:
   status: VERIFIED
   source: real calls 2026-10-22 (400 on string, 201 on number, reservedDiskSpace=1)
   checked: '2026-10-22'
+- id: release_api_flow
+  fact: Deploying = sources upload (-> sourceID) THEN POST /v2/projects/{name}/releases {sourceID, port,
+    type, message non-empty, build{cache}, cron[], args[], disks[], envs{}, platformConfig{}} -> {releaseID};
+    observe GET /v2/releases/{id}/build-logs ?since=<last createdAt> -> release.state READY|FAILED|UNHEALTHY|TIMEDOUT|CANCELED
+    + real build output lines. UNHEALTHY = built but not serving
+  source: real calls 2026-10-22 (releases 6ada77b6 READY, 6ada7da2 FAILED-silent, 6ada7ea5 READY-502)
+    + liara-cloud/cli deploy.ts + build-logs.ts
+  checked: '2026-10-22'
+  status: VERIFIED
+- id: sources_artifact_tar_gz
+  fact: The sources payload is a gzip tar (multipart field 'file', content-type application/gzip, name
+    *.tar.gz) — a zip or a tar sent as application/zip is stored as *.zip and the builder fails extraction
+    every time
+  source: 'real builds 2026-10-22: zip -> FAILED extraction x2; tar as application/zip -> FAILED; tar
+    as application/gzip -> READY; CLI create-archive.ts (tar, gzip 9)'
+  checked: '2026-10-22'
+  status: VERIFIED
+- id: update_envs_returns_201
+  fact: POST /v1/projects/update-envs answers 201 {"message":"success"} — accepting only 200 silently
+    failed every real deploy until fixed
+  source: real call 2026-10-22 (live 201; manual replays 201, HTTP status captured)
+  checked: '2026-10-22'
+  status: VERIFIED
+- id: docker_builder_no_pypi
+  fact: 'The iran-region docker builder cannot reach PyPI or public mirrors from RUN steps (3 silent FAILED
+    releases: direct, runflare mirror, offline wheels at COPY); buildpacks instead use an internal mirror
+    10.16.100.42/repository/pypi-proxy. Deploying the agent itself (A4) via platform docker is therefore
+    blocked; python buildpack reaches READY but its container-start convention for a raw FastAPI Procfile
+    app stays UNVERIFIED (502, runtime logs not exposed via GET /v1/projects/{name}/logs)'
+  source: real releases 2026-10-22 (6ada7b1e, 6ada7bc9, 6ada7ccdf, 6ada7da2 FAILED; 6ada7ea5 READY->502)
+  checked: '2026-10-22'
+  status: VERIFIED
+- id: live_url_format
+  fact: 'Deployed app URL: https://{app}.liara.run for apps WITH a network; iran-region apps WITHOUT a
+    network use https://{app}.iran.liara.run (CLI deploy.ts). Proven live: 200 from https://liarapilot-app.liara.run
+    after the self-fix'
+  source: real HTTP 200 2026-10-22 + liara-cloud/cli deploy.ts subdomain logic
+  checked: '2026-10-22'
+  status: VERIFIED
 unverified_facts:
 - id: pricing
   fact: Per-hour plan prices ARE live in GET /v1/me (plans.projects.price, Toman/hour — VERIFIED); disk
@@ -194,7 +233,8 @@ unverified_facts:
   fact: 'Observed live: project.status == ''ACTIVE'' after create+build (matched by the deployer''s case-insensitive
     STATUS_OK). Bad-state strings remain unobserved'
   status: UNVERIFIED
-  note: PARTIALLY VERIFIED 2026-10-22 — 'ACTIVE' seen live; failure strings still best-effort
+  note: SUPERSEDED 2026-10-22 — deploy completion is judged by the release state machine (release_api_flow),
+    not project.status
 - id: default_subdomain_url
   fact: Live URL format assumed https://{app-name}.liara.run; not found in spec or static docs pages (SPA).
     Verify Thursday from a real deploy/getAppByName

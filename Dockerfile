@@ -9,9 +9,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Dependencies first for layer caching
+# Dependencies first for layer caching. VERIFIED live 2026-10-22: the Iran
+# builder cannot reach PyPI (or the mirror) from docker RUN steps — two
+# releases failed silently at pip install. The deterministic fix: ship ALL
+# wheels with the sources and install fully OFFLINE (--no-index).
 COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+COPY wheels ./wheels
+RUN pip install --no-cache-dir --no-index --find-links=/app/wheels -r requirements.txt \
+ && rm -rf /app/wheels
 
 # Product code + assets (demo mode serves the bundled fixtures)
 COPY agent ./agent

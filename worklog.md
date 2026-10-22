@@ -529,3 +529,38 @@ Stage Summary:
   rerun live_check --live (ir-small) -> 100% real A3 -> A4 agent self-deploy ->
   cleanup of all test apps.
 - GitHub: https://github.com/KingMB5/liarapilot
+
+---
+Task ID: 5.3 (the real-run epic: money scene + self-heal + A4 attempts)
+Agent: Z.ai Code (main)
+Task: Execute the 100% real deployment scenario with the operator's credentials;
+deploy the agent itself; archive every discovery.
+
+Work Log:
+- Team context unlocked the 402: ?teamID= on every request (CLI mechanism);
+  team balance 2,000,000 Toman visible; network 'liarapilot-net' created (201).
+- Product hardened through a chain of live discoveries, each with a regression
+  test: update-envs returns 201 (the silent killer); app creation needs network
+  + bundlePlanID tier; the plan+price catalog is GET /v1/me; sources artifact is
+  a gzip TAR sent as application/gzip; deploys are RELEASE-based (POST releases
+  + GET v2/releases/{id}/build-logs state machine with real build output);
+  project.status ACTIVE != deployed (isDeployed is the truth); UNHEALTHY routes
+  to the unhealthy_url diagnosis family; npm/yarn run scripts resolve before the
+  start-file check; node start_command materializes as a package.json override.
+- THE MONEY SCENE (session cdbe0871e9db, 100% real, verified from outside):
+  build+push 100% -> READY -> real verify caught 502 -> evidence-based
+  change_start_command (npm run start -> node missing-entry.js absent; node
+  server.js present) -> package.json override -> READY -> verify 200 -> report
+  with fix_history. curl https://liarapilot-app.liara.run -> 200.
+- A4 agent self-deploy: 8 real releases, 3 strategies (docker+pip, docker+mirror,
+  docker+offline wheels, python buildpack x2). Docker RUN steps have NO PyPI
+  access (silent FAILED); python buildpack reaches READY (internal pip mirror
+  10.16.100.42) but a raw FastAPI Procfile app does not serve (502) and runtime
+  container logs are not exposed via the API. Documented honestly as blocked on
+  builder internals; both test apps deleted (projects: []).
+- Suite: 159 passed. Cleanup: /tmp/lp.env deleted at session end.
+
+Stage Summary:
+- A1/A2/A3: COMPLETE and REAL (evidence in docs/VERIFIED_MATRIX.md).
+- A4: ATTEMPTED, blocked by Liara builder internals (documented, not claimed).
+- The product survived a hostile live API: 6 critical fixes, each test-guarded.

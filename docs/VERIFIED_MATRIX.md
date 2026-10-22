@@ -127,3 +127,40 @@ _Tier-3 (delete app/disk) is intentionally absent — the agent never calls it._
 | 10 | restart (POST /v1/projects/liara-pilot-probe/actions/restart) | 2 | PASS | restart submitted \| raw: http 200  |
 
 _Tier-3 (delete app/disk) is intentionally absent — the agent never calls it._
+
+---
+## The deploy-pipeline saga — 2026-10-22 19:30→21:30 UTC (all raw evidence)
+
+The first 100% real product deploy surfaced a chain of API realities the spec
+snapshot (paas.yaml, 2026-10-20) does not describe. Every item below is a real
+call/build/release; the official CLI source (liara-cloud/cli) corroborates each.
+
+| # | Discovery | Verdict | Raw evidence |
+|---|-----------|---------|--------------|
+| 1 | Team credit is invisible without context: every request needs `?teamID=` (CLI: setGotConfig searchParams hook) | **PASS** | billing → `{user:{balance:0}, team:{balance:2000000}}`; without it create → 402 despite team credit |
+| 2 | `POST /v1/projects/update-envs` returns **201** (not 200) | **PASS** | live 201 `{"message":"success"}`; the 200-only check silently failed EVERY real deploy (3 fix attempts burned, session 4721d9f371d2) |
+| 3 | App creation requires `network` id + `bundlePlanID` tier | **PASS** | 400 `network_is_required`; 400 `"bundlePlanID" must be one of [free, basic, standard, pro]`; then 200 `{projectID}` |
+| 4 | Sources upload alone deploys NOTHING — a RELEASE must be created | **PASS** | CLI deploy.ts: `POST /v2/projects/{name}/releases {sourceID, port, type, build…}` → `{releaseID}`; body validation: message non-empty, cron/args arrays, envs/platformConfig objects, gitInfo omitted |
+| 5 | Build observation = `GET /v2/releases/{id}/build-logs?since=<last createdAt>` | **PASS** | `{release:{state,failReason}, buildOutput:[{stream,line,createdAt}]}`; states READY/FAILED/UNHEALTHY/TIMEDOUT/CANCELED; REAL build lines (npm install 68 pkgs, image push 100%) |
+| 6 | Sources artifact = **gzip tar** (not zip), multipart `application/gzip` + `.tar.gz` name | **PASS** | zip + tar-with-`application/zip` → release FAILED "An error occurred during extraction"; `application/gzip` → build READY with our bytes (release 6ada77b6) |
+| 7 | App status ACTIVE ≠ deployed: `isDeployed` field is the truth | **PASS** | project ACTIVE with isDeployed=false for 20+ min while unbuilt; CLI deploys flip it true |
+| 8 | URL format for apps WITH a network: `https://{app}.liara.run` | **PASS** | CLI deploy.ts + live: `curl https://liarapilot-app.liara.run` → 200 "never happens in mock" after the self-fix |
+| 9 | Docker platform: RUN steps have NO PyPI/mirror access in the iran builder | **FAIL (platform)** | 3 docker releases FAILED silently at `RUN pip install` (direct, runflare mirror, offline wheels at COPY) — buildpacks use an internal mirror `http://10.16.100.42/repository/pypi-proxy` |
+| 10 | Python buildpack: pip works (internal mirror), release reaches READY, but a raw FastAPI Procfile app does not serve (502) and container runtime logs are NOT exposed via `GET /v1/projects/{name}/logs` | **UNVERIFIED** | release 6ada7ea5 READY; URL 502; logs endpoint returns only the build-agent notice |
+
+### The money scene — 100% REAL closed loop (session cdbe0871e9db, run 21:02-21:07 UTC)
+
+```
+upload broken-project.zip → assessment (beginner 5/10) → real LLM plan (gpt-5.4-mini)
+→ tier-2 approval (env values) → create app → envs (201!) → tar.gz upload
+→ release → build (npm install, image push 100%) → READY
+→ verify: REAL GET https://liarapilot-app.liara.run → 502   [caught!]
+→ fix: evidence-based diagnosis (start «npm run start» → node missing-entry.js
+   absent; «node server.js» exists) → change_start_command → package.json override
+→ redeploy → release READY
+→ verify: REAL GET → 200 ✓
+→ report: deployed + fix_history audit trail
+OUTSIDE CHECK: curl https://liarapilot-app.liara.run → 200 "never happens in mock"
+```
+
+Test apps deleted afterwards (liarapilot-app, liarapilot-agent — projects: []).
