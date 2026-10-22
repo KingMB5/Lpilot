@@ -57,6 +57,7 @@
     hasPlan: false,
     planEl: null,         // plan card <li> (replaced, never duplicated)
     deployGroupEl: null,  // <ol> inside the "استقرار" group
+    monitorTimer: null,   // T6 report-screen poll timer
     es: null,             // EventSource
     sseTimer: null,
     sseAttempts: 0,
@@ -778,6 +779,26 @@
     scrollTimeline();
   }
 
+  function rMonitorAlert(p) {
+    var li = tlItem('tl-card', 'dot-red');
+    var card = el('div', 'card monitor-alert-card');
+    card.appendChild(el('div', 'fix-title', 'هشدار پایش'));
+    if (p.message_fa) card.appendChild(el('p', 'fix-reason', esc(p.message_fa)));
+    if (p.label) card.appendChild(el('span', 'badge badge-amber', esc(p.label)));
+    var sug = p.suggested_action;
+    if (sug && sug.tier) {
+      var row = el('div', 'monitor-row');
+      row.appendChild(el('span', 'muted small', 'اقدام پیشنهادی:'));
+      row.appendChild(el('span', 'ops-title', esc(sug.action)));
+      row.appendChild(tierBadge(sug));
+      card.appendChild(row);
+      card.appendChild(el('p', 'muted small', 'اجرای آن فقط با تأیید تو انجام می‌شود (ماتریس ریسک سطح ۲).'));
+    }
+    li.appendChild(card);
+    timelineEl().appendChild(li);
+    scrollTimeline();
+  }
+
   function rVerify(p) {
     var ok = !!p.ok;
     var li = tlItem('tl-card', ok ? 'dot-emerald' : 'dot-red');
@@ -848,7 +869,8 @@
     cancelled: rCancelled,
     level_changed: rLevelChanged,
     ops: rOps,
-    ops_denied: rOpsDenied
+    ops_denied: rOpsDenied,
+    monitor_alert: rMonitorAlert
   };
 
   /* ----------------------------------------------------------
@@ -1191,6 +1213,76 @@
     disableInputs(true);
     showScreen('report');
     renderReport();
+    if (store.report && (store.report.url || store.report.live_url)) startMonitorPolling();
+  }
+
+  /* ----------------------------------------------------------
+   * Continuous monitoring panel (T6) — poll /monitor on the report screen.
+   * Source labels: liara_api values stay UNVERIFIED-badged until a live read
+   * confirms units; inference is always labelled «استنتاج».
+   * ---------------------------------------------------------- */
+
+  function startMonitorPolling() {
+    if (store.monitorTimer) return;
+    renderMonitor(); // immediate first paint
+    store.monitorTimer = setInterval(renderMonitor, 15000);
+  }
+
+  function monitorSourceBadge(sample) {
+    if (sample.source === 'liara_api') return el('span', 'badge badge-amber monitor-src', UNVERIFIED_BADGE);
+    return el('span', 'badge badge-zinc monitor-src', 'استنتاج');
+  }
+
+  function renderMonitor() {
+    var box = $('#monitor-box');
+    if (!box || !store.sessionId) return;
+    api.monitor(store.sessionId).then(function (data) {
+      box.innerHTML = '';
+      var s = (data && data.sample) || {};
+      var alerting = !!(data && data.alerting);
+
+      if (alerting) {
+        var alert = el('div', 'monitor-alert', 'هشدار: سلامت برنامه افت کرده است. پیشنهاد خلبان: ری‌استارت (سطح ۲ — با تأیید تو).');
+        var ab = el('button', 'btn btn-ghost ops-btn', 'ری‌استارت برنامه');
+        ab.type = 'button';
+        ab.addEventListener('click', function () { openOpsApprovalModal('restart'); });
+        alert.appendChild(ab);
+        box.appendChild(alert);
+      }
+
+      var row = el('div', 'monitor-row');
+      var ok = (s.healthy !== undefined) ? !!s.healthy : (s.probe && s.probe.ok);
+      row.appendChild(el('span', 'badge ' + (ok ? 'badge-emerald' : 'badge-red'), ok ? 'سالم' : 'ناسالم'));
+      row.appendChild(monitorSourceBadge(s));
+      if (s.probe && s.probe.response_ms != null) {
+        row.appendChild(el('span', 'muted small', 'زمان پاسخ: ' + faDigits(s.probe.response_ms) + ' میلی‌ثانیه'));
+      }
+      if (s.plan_id) {
+        row.appendChild(el('span', 'muted small', 'پلن زنده: '));
+        row.appendChild(el('span', 'ltr-block', esc(s.plan_id)));
+      }
+      if (s.source === 'liara_api' && s.metrics) {
+        row.appendChild(el('span', 'muted small', 'متریک از API لیارا (مقیاس مقادیر UNVERIFIED)'));
+      }
+      box.appendChild(row);
+
+      var hist = (data && data.history) || [];
+      if (hist.length) {
+        var ul = el('ul', 'monitor-history');
+        hist.forEach(function (h, idx) {
+          var li = el('li', (h.healthy ? '' : 'bad') + (idx < hist.length - 12 ? ' old' : ''));
+          li.title = (h.healthy ? 'سالم' : 'ناسالم') + ' — ' + new Date((h.ts || 0) * 1000).toLocaleTimeString('fa-IR');
+          ul.appendChild(li);
+        });
+        box.appendChild(ul);
+      }
+    }).catch(function (e) {
+      if (isExpired(e)) { stopMonitorPolling(); }
+    });
+  }
+
+  function stopMonitorPolling() {
+    if (store.monitorTimer) { clearInterval(store.monitorTimer); store.monitorTimer = null; }
   }
 
   function reportStatus(r) {
@@ -1238,6 +1330,9 @@
     btnRestart.addEventListener('click', function () { openOpsApprovalModal('restart'); });
     row.appendChild(btnRestart);
     sec.appendChild(row);
+    var mwrap = el('div', 'monitor-box');
+    mwrap.id = 'monitor-box';
+    sec.appendChild(mwrap);
     return sec;
   }
 

@@ -151,8 +151,10 @@ def test_monitor_endpoint_readonly_contract():
     resp = c.get(f"/api/sessions/{sid}/monitor")
     assert resp.status_code == 200
     body = resp.json()
-    assert body["source"] in ("liara_api", "inference")
-    assert body["label"] in ("UNVERIFIED", "استنتاج")
+    assert body["sample"]["source"] in ("liara_api", "inference")
+    assert body["sample"]["label"] in ("UNVERIFIED", "استنتاج")
+    assert body["history"] == [] and body["alerting"] is False
+    assert body["interval_s"] >= 0
     # read-only: no mutation of session status/events
     snap = c.get(f"/api/sessions/{sid}").json()
     assert snap["status"] == "created"
@@ -167,6 +169,112 @@ def test_monitor_endpoint_unknown_session():
     c = TestClient(app)
     resp = c.get("/api/sessions/deadbeef/monitor")
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------- T6: periodic monitor
+
+from app.monitor import SessionMonitor, _sample_healthy, start_monitor  # noqa: E402
+
+
+class FlakyDown:
+    """A deployer whose app keeps failing the probe (degradation episode)."""
+
+    name = "mock"
+
+    def status(self):
+        return {"healthy": False, "url": "https://x.liara.run"}
+
+    def logs(self):
+        return ["node: exited with code 137 (oom)"]
+
+
+class Healthy:
+    name = "mock"
+
+    def status(self):
+        return {"healthy": True, "url": "https://x.liara.run"}
+
+    def logs(self):
+        return []
+
+
+def _session(deployer):
+    class S:
+        id = "mon-test"
+        status = "done"
+        plan = {"app_name": "my-app"}
+        report = {"url": None}
+        monitor_history = []
+        monitor_alerting = False
+        monitor_thread = None
+        events = []
+
+        def add_event(self, t, p):
+            self.events.append({"type": t, "payload": p})
+
+    s = S()
+    s.deployer = deployer
+    return s
+
+
+def test_sample_healthy_rules():
+    assert _sample_healthy({"source": "liara_api", "probe": {"ok": True}}) is True
+    assert _sample_healthy({"source": "liara_api", "probe": {"ok": False}}) is False
+    assert _sample_healthy({"source": "inference", "healthy": False}) is False
+    assert _sample_healthy({"source": "inference", "healthy": True, "probe": {"url": "u", "ok": False}}) is False
+    assert _sample_healthy({"source": "inference", "healthy": True, "probe": {}}) is True
+
+
+def test_alert_after_consecutive_unhealthy_with_tier2_suggestion():
+    s = _session(FlakyDown())
+    m = SessionMonitor(s)
+    m.record({"ts": 1, "source": "inference", "label": "استنتاج", "healthy": False})
+    assert s.monitor_alerting is False          # 1st bad sample: no alert yet
+    m.record({"ts": 2, "source": "inference", "label": "استنتاج", "healthy": False})
+    assert s.monitor_alerting is True           # 2nd consecutive -> alert
+    alerts = [e for e in s.events if e["type"] == "monitor_alert"]
+    assert len(alerts) == 1                     # ONE alert per episode
+    sug = alerts[0]["payload"]["suggested_action"]
+    assert sug["action"] == "restart" and sug["tier"] == "approval"  # T4 gate applies
+    m.record({"ts": 3, "source": "inference", "label": "استنتاج", "healthy": False})
+    assert len([e for e in s.events if e["type"] == "monitor_alert"]) == 1  # still one
+
+
+def test_recovery_rearms_alerting_and_history_capped():
+    s = _session(FlakyDown())
+    m = SessionMonitor(s)
+    m.record({"ts": 1, "source": "inference", "label": "استنتاج", "healthy": False})
+    m.record({"ts": 2, "source": "inference", "label": "استنتاج", "healthy": False})
+    s.deployer = Healthy()
+    m.record({"ts": 3, "source": "inference", "label": "استنتاج", "healthy": True})
+    assert s.monitor_alerting is False
+    rec = [e for e in s.events if e["type"] == "monitor" and e["payload"].get("event") == "recovered"]
+    assert len(rec) == 1
+    for i in range(50):
+        m.record({"ts": 100 + i, "source": "inference", "label": "استنتاج", "healthy": True})
+    assert len(s.monitor_history) == 30         # capped short history (default)
+
+
+def test_start_monitor_disabled_when_interval_zero(monkeypatch):
+    monkeypatch.setenv("MONITOR_INTERVAL_S", "0")
+    s = _session(Healthy())
+    assert start_monitor(s) is None             # opt-out honored
+
+
+def test_start_monitor_runs_and_records(monkeypatch):
+    monkeypatch.setenv("MONITOR_INTERVAL_S", "0.05")
+    monkeypatch.setenv("MONITOR_HISTORY_N", "5")
+    s = _session(Healthy())
+    t = start_monitor(s)
+    assert t is not None and t.is_alive()
+    import time
+
+    time.sleep(0.4)
+    t.stop()
+    t.join(timeout=2)
+    assert not t.is_alive()
+    assert 1 <= len(s.monitor_history) <= 5
+    assert all(h["healthy"] for h in s.monitor_history)
 
 
 # ---------------------------------------------------------------- T5: plans

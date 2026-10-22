@@ -246,13 +246,24 @@ def _state_summary(s: Session) -> dict:
 
 @app.get("/api/sessions/{sid}/monitor")
 def monitor(sid: str):
-    """One read-only monitoring sample. source=liara_api -> values carry an
-    UNVERIFIED badge (units unconfirmed); source=inference -> explicitly
-    «استنتاج». This endpoint NEVER mutates anything."""
+    """One read-only monitoring sample + the short history + alert state.
+    source=liara_api -> values carry an UNVERIFIED badge (units unconfirmed);
+    source=inference -> explicitly «استنتاج». This endpoint NEVER mutates
+    anything; suggested actions carry their T4 risk tier and still require the
+    /ops approval gate to execute."""
     s = _get_session(sid)
     from app.monitor import sample_now
 
-    return sample_now(s)
+    with s._cond:  # history is mutated by the poller thread
+        history = list(s.monitor_history)
+        alerting = bool(s.monitor_alerting)
+    return {
+        "sample": sample_now(s),
+        "history": history,
+        "alerting": alerting,
+        "interval_s": float(os.getenv("MONITOR_INTERVAL_S",
+                                      str(load_defaults().get("monitor", {}).get("interval_s", 30)))),
+    }
 
 
 # ---------------------------------------------------------------- post-deploy ops (T4, risk-gated)

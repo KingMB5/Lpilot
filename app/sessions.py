@@ -40,6 +40,10 @@ class Session:
     cancel_flag: bool = False
     error: str = ""
     llm_name: str = "fake"
+    # continuous monitoring (T6) — short in-RAM history only, never persisted
+    monitor_history: list = field(default_factory=list)
+    monitor_alerting: bool = False
+    monitor_thread: Any = None
     _seq: int = 0
     _cond: threading.Condition = field(default_factory=threading.Condition, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)

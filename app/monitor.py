@@ -20,8 +20,11 @@ from __future__ import annotations
 
 import os
 import re
+import threading
 import time
 from typing import Any
+
+from agent.risk import safe_action
 
 OOM_RE = re.compile(r"(out of memory|oom|killed|fatal|crash|exit code|exited with)", re.IGNORECASE)
 
@@ -96,3 +99,109 @@ def sample_now(session) -> dict:
             "app_status": status.get("status", ""),
             "suspect_log_lines": suspects,
             "probe": probe}
+
+
+# ---------------------------------------------------------------- periodic monitoring (T6)
+
+def _cfg() -> dict:
+    from app.config import load_defaults
+
+    m = load_defaults().get("monitor", {})
+    return {
+        "interval_s": float(os.getenv("MONITOR_INTERVAL_S", str(m.get("interval_s", 30)))),
+        "history_n": int(os.getenv("MONITOR_HISTORY_N", str(m.get("history_n", 30)))),
+        "alert_after": int(os.getenv("MONITOR_ALERT_AFTER", str(m.get("alert_after", 2)))),
+        "max_lifetime": int(m.get("max_lifetime_samples", 600)),
+    }
+
+
+def _sample_healthy(sample: dict) -> bool:
+    """A sample is healthy when BOTH the app status says so AND the live URL
+    (if any) answered. Any evidence to the contrary counts as unhealthy."""
+    if sample.get("source") == "liara_api":
+        probe = sample.get("probe") or {}
+        return bool(probe.get("ok"))
+    if sample.get("healthy") is False:
+        return False
+    probe = sample.get("probe") or {}
+    if probe.get("url") and not probe.get("ok"):
+        return False
+    return True
+
+
+class SessionMonitor(threading.Thread):
+    """Periodic health poller for one deployed session (read-only by design).
+
+    - polls every `interval_s` (env MONITOR_INTERVAL_S; <=0 disables -> not started)
+    - keeps a SHORT history (MONITOR_HISTORY_N) in RAM on the session
+    - after MONITOR_ALERT_AFTER consecutive unhealthy samples emits ONE
+      `monitor_alert` SSE event per degradation episode, with a SUGGESTED action
+      that carries its risk tier (T4) — executing it still goes through the
+      tier-2 approval gate in /ops.
+    """
+
+    def __init__(self, session) -> None:
+        super().__init__(daemon=True, name=f"monitor-{session.id}")
+        self.session = session
+        self.cfg = _cfg()
+        self._halt = threading.Event()
+        self._consecutive_bad = 0
+        self._alerted_episode = False
+        self._count = 0
+
+    def stop(self) -> None:
+        self._halt.set()
+
+    def run(self) -> None:
+        interval = self.cfg["interval_s"]
+        if interval <= 0:
+            return
+        while not self._halt.wait(interval):
+            self._count += 1
+            if self._count > self.cfg["max_lifetime"]:
+                return  # hard stop for long-lived sessions
+            try:
+                sample = sample_now(self.session)
+            except Exception:  # noqa: BLE001 — a broken sample is just a bad sample
+                sample = {"ts": round(time.time(), 3), "source": "inference",
+                          "label": "استنتاج", "healthy": False, "probe": {}}
+            self.record(sample)
+
+    def record(self, sample: dict) -> None:
+        """One poll result: history, episode alerting, SSE emit."""
+        s = self.session
+        healthy = _sample_healthy(sample)
+        sample = {**sample, "healthy": healthy}
+        s.monitor_history = (s.monitor_history + [sample])[-self.cfg["history_n"]:]
+        if healthy:
+            self._consecutive_bad = 0
+            if self._alerted_episode:
+                self._alerted_episode = False  # recovered -> re-arm
+                s.monitor_alerting = False
+                s.add_event("monitor", {"event": "recovered", "ts": sample.get("ts")})
+            return
+        self._consecutive_bad += 1
+        if self._consecutive_bad >= self.cfg["alert_after"] and not self._alerted_episode:
+            self._alerted_episode = True
+            s.monitor_alerting = True
+            # the suggested action follows the T4 matrix: restart is tier 2,
+            # so the UI opens the approval modal before /ops runs it
+            s.add_event("monitor_alert", {
+                "message_fa": "پایش: سلامت برنامه افت کرده است (نمونه‌های پیاپی ناموفق).",
+                "source": sample.get("source"), "label": sample.get("label"),
+                "ts": sample.get("ts"),
+                "suggested_action": safe_action("restart"),
+            })
+
+
+def start_monitor(session) -> Any | None:
+    """Start the periodic monitor for a deployed session (T6). Honors
+    MONITOR_INTERVAL_S (<=0 disables). Never starts twice."""
+    if session.monitor_thread is not None and session.monitor_thread.is_alive():
+        return session.monitor_thread
+    if _cfg()["interval_s"] <= 0:
+        return None
+    t = SessionMonitor(session)
+    session.monitor_thread = t
+    t.start()
+    return t

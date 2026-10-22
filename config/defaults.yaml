@@ -12,6 +12,12 @@ llm:
   max_tokens_per_run: 60000  # approximate per-run budget, enforced in code (T11)
   request_timeout_s: 30
 
+monitor:
+  interval_s: 30       # poll period after a successful deploy (env MONITOR_INTERVAL_S)
+  history_n: 30        # short in-RAM history per session (env MONITOR_HISTORY_N)
+  alert_after: 2       # consecutive unhealthy samples before an alert (env MONITOR_ALERT_AFTER)
+  max_lifetime_samples: 600  # hard stop for long-running sessions
+
 deploy:
   timeout_s: 600
   verify_timeout_s: 10

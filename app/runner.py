@@ -118,6 +118,14 @@ def _run(session: Session, resume_with: dict | None) -> None:
         if state.get("level") and session.level is None:
             session.level = state["level"]
         session.add_event("done", {"status": session.status})
+        # T6: a successfully deployed session gets its periodic health monitor
+        if session.status == "done" and (session.report or {}).get("url"):
+            from app.monitor import start_monitor
+
+            try:
+                start_monitor(session)
+            except Exception:  # noqa: BLE001 — monitoring must never break the run
+                pass
     except Exception as e:  # noqa: BLE001 — one clean failure path for the UI
         session.status = "error"
         session.error = f"{type(e).__name__}: {e}"
