@@ -104,8 +104,6 @@ def test_redaction_ignores_placeholders_and_short_values():
 def test_schema_retry_then_fallback(monkeypatch):
     from llm import client as cl
 
-    reg, bud = SecretRegister(), RunBudget(100000)
-    fake = FakeLLM(reg, bud, CONCEPTS)
 
     class Boom:
         name = "boom"

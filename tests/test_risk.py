@@ -12,7 +12,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from agent.risk import (TIER_APPROVAL, TIER_AUTO, TIER_FORBIDDEN, RISK_MATRIX,
+from agent.risk import (TIER_APPROVAL, TIER_AUTO, TIER_FORBIDDEN,
                         RiskDenied, classify, gate, require, safe_action)
 from app.main import app
 from llm.diagnose import ALLOWED_ACTIONS
@@ -108,7 +108,6 @@ def test_ops_tier2_with_approval_executes():
 
 def test_ops_tier3_always_refused_never_reaches_deployer():
     sid = _deployed_session()
-    before = len(client.get(f"/api/sessions/{sid}").json()["events"])
     for approved in (False, True):
         r = client.post(f"/api/sessions/{sid}/ops", json={"action": "delete_app", "approved": approved})
         assert r.status_code == 400  # unknown/never-executable from this path

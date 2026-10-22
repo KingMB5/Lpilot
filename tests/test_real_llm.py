@@ -15,7 +15,6 @@ import logging
 import pytest
 from pydantic import ValidationError
 
-from agent.graph import resume
 from deployers.mock import MockDeployer
 from llm.client import DEFAULT_LLM_BASE_URL, DEFAULT_LLM_MODEL, BudgetExceededError, \
     OpenAICompatClient, RunBudget, get_client

@@ -104,6 +104,21 @@ Two paths, both documented in `docs/DEPLOY_AGENT.md`:
 
 The agent's own healthcheck is `GET /api/health` (booleans only — no secret values, ever).
 
+**Public deployment protection (required):** set `RATE_LIMIT_PER_MIN` (per-IP sliding
+window) and `RATE_LIMIT_GLOBAL_M` (process-wide ceiling) in the app's env on Liara —
+e.g. `60` / `600`. Both are off by default for local use; `/api/health` is always exempt.
+`LLM_MAX_CALLS` caps billable LLM calls per run regardless of traffic.
+
+### Verify against the real API before a real deploy
+
+```bash
+LIARA_API_TOKEN=<token-from-panel> python3 scripts/live_check.py            # tier-1 real reads + tier-2 dry-run
+LIARA_PLAN_ID=ir-small LIARA_API_TOKEN=<token> python3 scripts/live_check.py --live   # smallest plan; creates a probe app — delete it from the panel afterwards
+```
+
+Every step prints PASS/FAIL/UNVERIFIED with the raw (redacted) error and appends a dated row
+to `docs/VERIFIED_MATRIX.md`.
+
 ## Tests
 
 ```bash
@@ -124,6 +139,9 @@ uploaded code is ever executed" guarantee.
 - Uploaded code is inspected, never executed. Zip extraction is slip/size/count hardened.
 - Paid/destructive operations are gated: see the three-tier risk matrix in
   `docs/ARCHITECTURE.md` (automatic / approval-required / never-offered).
+- Full threat model and secret-handling rules: [`SECURITY.md`](SECURITY.md).
+- Audits (2026-10-22): `gitleaks` — no leaks in working tree **or** full git history (40 commits);
+  `bandit` — no issues; `pip-audit` on pinned `requirements.txt` — no known vulnerabilities.
 
 ## خلاصه‌ی فارسی
 

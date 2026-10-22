@@ -4,7 +4,6 @@ pause, give_up escalation, MockDeployer's two new canned failures, prompt redact
 from __future__ import annotations
 
 import json
-import pathlib
 
 import pytest
 from pydantic import ValidationError

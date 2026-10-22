@@ -26,8 +26,6 @@ def extract_zip(zp_path: str, dest_dir: str) -> dict:
     dest = os.path.realpath(dest_dir)
     os.makedirs(dest, exist_ok=True)
 
-    files = 0
-    total = 0
     with zipfile.ZipFile(zp_path) as zf:
         return _extract_from(zf, infos=zf.infolist(), dest=dest,
                              max_files=max_files, max_total=max_total, max_member=max_member)

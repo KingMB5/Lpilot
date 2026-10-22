@@ -8,7 +8,7 @@ import zipfile
 import pytest
 
 from app import zipsafe
-from app.redact import SecretRegister, redact_text
+from app.redact import SecretRegister
 from inspector.core import inspect
 from llm.client import _Base, RunBudget
 

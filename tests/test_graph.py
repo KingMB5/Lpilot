@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import pathlib
 
-import pytest
 
 from agent.graph import build_graph, resume
 from agent.nodes import Deps

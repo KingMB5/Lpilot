@@ -14,7 +14,7 @@ import hashlib
 import json
 import logging
 import os
-from typing import Any, Callable, Protocol
+from typing import Callable, Protocol
 
 from pydantic import BaseModel, ValidationError
 

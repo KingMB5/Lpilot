@@ -5,7 +5,6 @@ and gating logic is exercised; live evidence belongs to docs/VERIFIED_MATRIX.md)
 from __future__ import annotations
 
 import httpx
-import pytest
 
 import sys
 import pathlib
