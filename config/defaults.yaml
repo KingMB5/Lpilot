@@ -54,58 +54,41 @@ demo:
   mock_env_var: DATABASE_URL
 
 verified_facts:
-  - id: cli_deploy_flags
+  - id: billing_endpoint_real
     fact: >-
-      liara deploy accepts --api-token, --path, --platform, -a/--app, -p/--port,
-      --detach, --no-app-logs, --build-arg, --no-cache, -b iran|germany,
-      --team-id, --liara-json
-    source: "https://docs.liara.ir/references/cli/deploy-app/"
-    checked: "2026-10-20"
-  - id: boxapi_llm_endpoint
+      GET /v1/billing (documented outside paas.yaml) returns 200 with
+      {user:{balance,accountType,minCreditAmount,isManualMinCredit}}; live
+      account shows balance 0 — this is why app creation returns 402
+    status: VERIFIED
+    source: "real HTTP call 200, 2026-10-22"
+    checked: "2026-10-22"
+
+  - id: plan_ids_real
     fact: >-
-      BoxAPI starcoach LLM endpoint is OpenAI-compatible: base_url
-      https://ai.boxapi.ir/ai/v1 with the official OpenAI SDK; sample model in
-      the challenge brief is gpt-6-astra. Docs page (boxapi.ir/starcoach) is
-      behind login; the brief's sample code is the source.
-    source: "challenge brief sample code provided by operator (Mehran), 2026-10-22"
-    checked: 2026-10-22
-  - id: liara_cli_ops_surface
+      Valid planID values enumerated by the live API's own 400 validation
+      message: ir-small, ir-medium, standard-base, standard-plus, pro, pro-plus,
+      pro-max, small-g2, medium-g2, standard-base-g2, standard-plus-g2, pro-g2,
+      pro-plus-g2, pro-max-g2, express-g2 — smallest is ir-small
+    status: VERIFIED
+    source: "real HTTP call POST /v1/projects with invalid planID -> 400 listing, 2026-10-22"
+    checked: "2026-10-22"
+
+  - id: create_app_402_zero_balance
     fact: >-
-      Liara CLI documented surface covers: app create/delete/list, deploy,
-      start/stop, restart, logs, env var get/set/delete, disks, databases,
-      domains, accounts — the same operation families LiaraApiDeployer uses via
-      the HTTP API (the CLI is a client of api.liara.ir). Confirms our deployer
-      op-set is real-platform backed; HTTP endpoints themselves verified in
-      config/spec/paas.yaml.
-    source: "https://docs.liara.ir/references/cli/about/ (sidebar + intro)"
-    checked: 2026-10-22
-  - id: node_sqlite_needs_disk
+      POST /v1/projects on a zero-balance account returns 402
+      {"message":"Not enough balance."}; downstream steps fail with
+      project_not_found until credit exists
+    status: VERIFIED
+    source: "real HTTP call 402, 2026-10-22"
+    checked: "2026-10-22"
+  - id: boxapi_endpoint_reachable
     fact: >-
-      SQLite on Liara Node.js apps requires creating a disk and mounting it via
-      liara.json; official example uses the raw sqlite3 module, not Prisma
-    source: "https://docs.liara.ir/paas/nodejs/how-tos/connect-to-db/sqlite/"
-    checked: "2026-10-20"
-  - id: prisma_guide_is_postgres
-    fact: "Official Liara Prisma guide uses PostgreSQL only"
-    source: "https://docs.liara.ir/paas/nodejs/how-tos/connect-to-db/prisma/"
-    checked: "2026-10-20"
-  - id: no_official_nextjs_guide
-    fact: >-
-      No official Next.js guide listed under Liara Node platform docs
-      (Nuxt, Remix, Nitro, NestJS guides exist)
-    source: "https://docs.liara.ir/paas/nodejs/getting-started/"
-    checked: "2026-10-20"
-  - id: liara_json_platform_values
-    fact: >-
-      liara.json "platform" accepts exactly: node, next, laravel, php, python,
-      django, flask, dotnet, react, angular, vue, static, docker ("next" IS official);
-      wrong value aborts deploy. "port" field also supported.
-    source: "https://docs.liara.ir/paas/liarajson/"
-    checked: "2026-10-20"
-  - id: liara_json_disks_schema
-    fact: 'liara.json disks schema: {"disks":[{"name":"database","mountTo":"db"}]}'
-    source: "https://docs.liara.ir/paas/nodejs/how-tos/connect-to-db/sqlite/"
-    checked: "2026-10-20"
+      https://ai.boxapi.ir/ai/v1 answers /models and /chat/completions with 401
+      and OpenAI-shaped error JSON (type: proxy_error) without a key — endpoint
+      exists, reachable, OpenAI-compatible surface confirmed
+    status: VERIFIED
+    source: "real HTTP probe 401 (no key held in sandbox), 2026-10-22"
+    checked: "2026-10-22"
   - id: liara_http_api
     fact: >-
       Documented OpenAPI HTTP API exists (base https://api.liara.ir, auth
@@ -115,14 +98,6 @@ verified_facts:
       apps create/delete/restart/turn-on-off, disks create/resize, plus
       wss://api.liara.ir?token=...&cmd=/bin/bash&project_id=... real-time shell.
     source: "https://developers.liara.ir/llms.txt"
-    checked: "2026-10-20"
-  - id: deployer_recommendation
-    fact: >-
-      Pure-Python LiaraApiDeployer via the HTTP API is viable and preferred
-      (no Node runtime needed); LiaraCliDeployer stays as fallback. Deploy-sources
-      payload/auth details must be re-checked against the OpenAPI spec (paas.yaml)
-      before Thursday implementation.
-    source: "https://developers.liara.ir/pass/deploy/deploy-sources-code.md"
     checked: "2026-10-20"
   - id: paas_api_auth
     fact: >-
@@ -248,13 +223,6 @@ unverified_facts:
       Value format of the REQUIRED getAppLogs `since` param (string) — sending
       LIARA_LOGS_SINCE (default "0"); adjust live if rejected
     status: UNVERIFIED
-  - id: plan_catalog_missing
-    fact: >-
-      No plan-catalog/pricing endpoint in paas.yaml (grep '/plans', 'getPlans',
-      'marketplace' -> zero path hits; 'plan' only appears as planID fields).
-      Live plan/price reading is IMPOSSIBLE via this API — prices.yaml stays the
-      fallback and the limitation is announced in the UI
-    status: UNVERIFIED  # the LIMITATION is verified; live values remain unknown
   - id: metrics_values_semantics
     fact: >-
       Units/scaling of metrics values (cpuUsage/memoryUsage arrays, applet
@@ -293,3 +261,109 @@ unverified_facts:
       CLI log access: superseded by verified HTTP API GET /v1/projects/{name}/logs;
       CLI flag still unverified
     status: UNVERIFIED
+  - id: cli_deploy_flags
+    fact: >-
+      liara deploy accepts --api-token, --path, --platform, -a/--app, -p/--port,
+      --detach, --no-app-logs, --build-arg, --no-cache, -b iran|germany,
+      --team-id, --liara-json
+    source: "https://docs.liara.ir/references/cli/deploy-app/"
+    checked: "2026-10-20"
+    status: UNVERIFIED
+    note: >-
+      DOWNGRADED 2026-10-22 — source was documentation only; rule: a fact is VERIFIED
+      only by a real successful API call or by presence in config/spec/paas.yaml
+
+  - id: liara_cli_ops_surface
+    fact: >-
+      Liara CLI documented surface covers: app create/delete/list, deploy,
+      start/stop, restart, logs, env var get/set/delete, disks, databases,
+      domains, accounts — the same operation families LiaraApiDeployer uses via
+      the HTTP API (the CLI is a client of api.liara.ir). Confirms our deployer
+      op-set is real-platform backed; HTTP endpoints themselves verified in
+      config/spec/paas.yaml.
+    source: "https://docs.liara.ir/references/cli/about/ (sidebar + intro)"
+    checked: 2026-10-22
+    status: UNVERIFIED
+    note: >-
+      DOWNGRADED 2026-10-22 — source was documentation only; rule: a fact is VERIFIED
+      only by a real successful API call or by presence in config/spec/paas.yaml
+
+  - id: node_sqlite_needs_disk
+    fact: >-
+      SQLite on Liara Node.js apps requires creating a disk and mounting it via
+      liara.json; official example uses the raw sqlite3 module, not Prisma
+    source: "https://docs.liara.ir/paas/nodejs/how-tos/connect-to-db/sqlite/"
+    checked: "2026-10-20"
+    status: UNVERIFIED
+    note: >-
+      DOWNGRADED 2026-10-22 — source was documentation only; rule: a fact is VERIFIED
+      only by a real successful API call or by presence in config/spec/paas.yaml
+
+  - id: prisma_guide_is_postgres
+    fact: "Official Liara Prisma guide uses PostgreSQL only"
+    source: "https://docs.liara.ir/paas/nodejs/how-tos/connect-to-db/prisma/"
+    checked: "2026-10-20"
+    status: UNVERIFIED
+    note: >-
+      DOWNGRADED 2026-10-22 — source was documentation only; rule: a fact is VERIFIED
+      only by a real successful API call or by presence in config/spec/paas.yaml
+
+  - id: no_official_nextjs_guide
+    fact: >-
+      No official Next.js guide listed under Liara Node platform docs
+      (Nuxt, Remix, Nitro, NestJS guides exist)
+    source: "https://docs.liara.ir/paas/nodejs/getting-started/"
+    checked: "2026-10-20"
+    status: UNVERIFIED
+    note: >-
+      DOWNGRADED 2026-10-22 — source was documentation only; rule: a fact is VERIFIED
+      only by a real successful API call or by presence in config/spec/paas.yaml
+
+  - id: liara_json_platform_values
+    fact: >-
+      liara.json "platform" accepts exactly: node, next, laravel, php, python,
+      django, flask, dotnet, react, angular, vue, static, docker ("next" IS official);
+      wrong value aborts deploy. "port" field also supported.
+    source: "https://docs.liara.ir/paas/liarajson/"
+    checked: "2026-10-20"
+    status: UNVERIFIED
+    note: >-
+      DOWNGRADED 2026-10-22 — source was documentation only; rule: a fact is VERIFIED
+      only by a real successful API call or by presence in config/spec/paas.yaml
+
+  - id: liara_json_disks_schema
+    fact: 'liara.json disks schema: {"disks":[{"name":"database","mountTo":"db"}]}'
+    source: "https://docs.liara.ir/paas/nodejs/how-tos/connect-to-db/sqlite/"
+    checked: "2026-10-20"
+    status: UNVERIFIED
+    note: >-
+      DOWNGRADED 2026-10-22 — source was documentation only; rule: a fact is VERIFIED
+      only by a real successful API call or by presence in config/spec/paas.yaml
+
+  - id: deployer_recommendation
+    fact: >-
+      Pure-Python LiaraApiDeployer via the HTTP API is viable and preferred
+      (no Node runtime needed); LiaraCliDeployer stays as fallback. Deploy-sources
+      payload/auth details must be re-checked against the OpenAPI spec (paas.yaml)
+      before Thursday implementation.
+    source: "https://developers.liara.ir/pass/deploy/deploy-sources-code.md"
+    checked: "2026-10-20"
+    status: UNVERIFIED
+    note: >-
+      DOWNGRADED 2026-10-22 — source was documentation only; rule: a fact is VERIFIED
+      only by a real successful API call or by presence in config/spec/paas.yaml
+  - id: boxapi_model_name
+    fact: >-
+      gpt-6-astra is the model named in the challenge brief's BoxAPI sample
+      code; the first real completion call with the operator's key is still
+      pending (key not present in the sandbox)
+    status: UNVERIFIED
+    status: UNVERIFIED
+  - id: plans_catalog_absent
+    fact: >-
+      No plan-catalog endpoint: GET /v1/plans returns 404 {"error":"Not Found"}
+      against the live API; valid planIDs were learned from the 400 validation
+      message instead (see plan_ids_real)
+    status: VERIFIED
+    source: "real HTTP call GET /v1/plans -> 404, 2026-10-22"
+    checked: "2026-10-22"

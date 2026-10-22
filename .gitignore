@@ -90,3 +90,6 @@ data/uploads/
 /eslint.config.mjs
 /scripts/serve.sh
 /dev.pid
+
+# sandbox tool noise (never part of the deliverable)
+/tool-results/

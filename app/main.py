@@ -38,6 +38,21 @@ FIXTURES = {
 app = FastAPI(title="LiaraPilot", docs_url=None, redoc_url=None)
 
 
+@app.middleware("http")
+async def _rate_limit_middleware(request, call_next):
+    """A4: protect a public deployment — per-IP + global sliding window.
+
+    Healthcheck is exempt so the platform monitor can always reach it.
+    Configure via RATE_LIMIT_PER_MIN / RATE_LIMIT_GLOBAL_M (0 disables).
+    """
+    from app.ratelimit import check_rate_limit
+
+    resp = check_rate_limit(request.scope)
+    if resp is not None:
+        return resp
+    return await call_next(request)
+
+
 def _expired() -> HTTPException:
     return HTTPException(status_code=404, detail="session_expired")
 
