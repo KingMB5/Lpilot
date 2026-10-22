@@ -742,11 +742,11 @@
 
   function tierBadge(rt) {
     var cls = TIER_BADGE_CLS[rt.tier] || 'badge-zinc';
-    var b = el('span', 'badge ' + cls + ' tier-badge', esc(rt.tier_fa || rt.tier || ''));
-    if (rt.tier_level) {
-      var lbl = el('span', 'tier-level', 'سطح ' + faDigits(rt.tier_level));
-      lbl.style.marginInlineStart = '6px';
-      b.appendChild(lbl);
+    var fa = rt.tier_fa || rt.tier || '';
+    var b = el('span', 'badge ' + cls + ' tier-badge', esc(fa));
+    // append the numeric level only when the label does not already say it
+    if (rt.tier_level && fa.indexOf('سطح') === -1) {
+      b.appendChild(el('span', 'tier-level', 'سطح ' + faDigits(rt.tier_level)));
     }
     return b;
   }
@@ -1365,9 +1365,19 @@
       okBtn.textContent = 'در حال اجرا…';
       api.ops(store.sessionId, { action: action, approved: true }).then(function (res) {
         closeModal();
-        // The report screen has no live SSE any more — show the result here.
-        addNote((action === 'restart' ? 'ری‌استارت: ' : 'عملیات: ')
-          + ((res && res.message_fa) ? res.message_fa : 'ثبت شد.'));
+        // The report screen has no live timeline — show the result in the ops panel.
+        var box = $('#monitor-box');
+        var text = (action === 'restart' ? 'ری‌استارت: ' : 'عملیات: ')
+          + ((res && (res.message_fa || res.message)) ? (res.message_fa || res.message) : 'ثبت شد.');
+        if (box) {
+          box.innerHTML = '';
+          var note = el('div', 'monitor-row ops-result');
+          note.appendChild(el('span', 'badge badge-emerald', 'انجام شد'));
+          note.appendChild(el('span', 'ltr-block', esc(text)));
+          box.appendChild(note);
+        } else {
+          addNote(text);
+        }
       }).catch(function (e) {
         okBtn.disabled = false; noBtn.disabled = false;
         okBtn.textContent = 'تأیید و اجرا';

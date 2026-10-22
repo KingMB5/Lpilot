@@ -868,3 +868,4 @@ body {
   background: var(--red-dim); border: 1px solid var(--red-border); color: var(--red-bright);
   border-radius: 12px; padding: 10px 12px; font-size: 0.9rem;
 }
+.ops-result { background: var(--emerald-dim); border: 1px solid var(--emerald-border); border-radius: 12px; padding: 10px 12px; }
