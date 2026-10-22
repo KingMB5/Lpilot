@@ -39,11 +39,31 @@ scripts/    demo_mock.py (offline E2E script), live_check.py (staged real-API pr
 
 ## Run — DEMO mode (fully offline, safe)
 
+One-click launchers: `run_demo.bat` (Windows) / `run_demo.sh` (Linux & macOS).
+
+Or manually — Linux / macOS:
+
 ```bash
 pip install -r requirements.txt
 DEMO_MODE=1 uvicorn app.main:app --host 0.0.0.0 --port 3000
-# open http://localhost:3000 — demo badge on, FakeLLM + MockDeployer, zero external calls
 ```
+
+Windows (PowerShell):
+
+```powershell
+pip install -r requirements.txt
+$env:DEMO_MODE="1"
+python -m uvicorn app.main:app --host 0.0.0.0 --port 3000
+```
+
+Windows (cmd):
+
+```bat
+set DEMO_MODE=1
+python -m uvicorn app.main:app --host 0.0.0.0 --port 3000
+```
+
+Then open http://localhost:3000 — demo badge on, FakeLLM + MockDeployer, zero external calls.
 
 Demo fixtures: `next-prisma-sqlite` (the perfume store — yields risks R1–R4), `node-express`,
 `plain-html`, `broken-project` (drives the failure → diagnose → ask-user → self-fix loop).
@@ -54,6 +74,8 @@ Demo fixtures: `next-prisma-sqlite` (the perfume store — yields risks R1–R4)
 cp .env.example .env   # then fill at least LLM_API_KEY (and LIARA_PLAN_ID / token per session)
 DEMO_MODE=0 DEPLOYER=liara_api uvicorn app.main:app --host 0.0.0.0 --port 3000
 ```
+
+Windows PowerShell equivalent: `$env:DEMO_MODE="0"; $env:DEPLOYER="liara_api"; python -m uvicorn app.main:app --host 0.0.0.0 --port 3000`
 
 - LLM: any OpenAI-compatible endpoint via `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL`
   (BoxAPI defaults are pre-filled in `.env.example`; they are not secrets). `LLM_MAX_CALLS` caps
