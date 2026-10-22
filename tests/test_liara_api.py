@@ -152,6 +152,25 @@ def test_existing_app_skips_create():
     assert get_app.call_count == 1  # existence check only
 
 
+@respx.mock
+def test_update_envs_accepts_201_not_only_200(tmp_path):
+    """VERIFIED live 2026-10-22: POST update-envs returns 201 — accepting only
+    200 silently failed every real deploy (3 fix attempts burned on it)."""
+    respx.get(f"{BASE}/v1/projects/my-app").mock(
+        return_value=httpx.Response(200, json={"project": {"status": "ACTIVE", "isDeployed": True}}))
+    envs = respx.post(f"{BASE}/v1/projects/update-envs").mock(
+        return_value=httpx.Response(201, json={"message": "success"}))
+    respx.post(f"{BASE}/v2/projects/my-app/sources").mock(
+        return_value=httpx.Response(200, json={"sourceID": "s"}))
+    respx.post(f"{BASE}/v2/projects/my-app/releases").mock(
+        return_value=httpx.Response(200, json={"releaseID": "rel-1"}))
+    respx.get(f"{BASE}/v2/releases/rel-1/build-logs").mock(
+        return_value=httpx.Response(200, json={"release": {"state": "READY"}, "buildOutput": []}))
+    res = deployer().deploy(_cfg(tmp_project()))
+    assert res["ok"] is True
+    assert envs.call_count == 1
+
+
 # ---------------------------------------------------------------- team context (VERIFIED live 2026-10-22)
 
 @respx.mock
@@ -248,7 +267,7 @@ def test_missing_plan_blocks_create_without_inventing():
 @respx.mock
 def test_429_retried_with_backoff_then_success():
     route = respx.post(f"{BASE}/v1/projects/update-envs").mock(side_effect=[
-        httpx.Response(429), httpx.Response(429), httpx.Response(200, json={"message": "ok"})])
+        httpx.Response(429), httpx.Response(429), httpx.Response(201, json={"message": "success"})])
     respx.post(f"{BASE}/v2/projects/my-app/sources").mock(
         return_value=httpx.Response(200, json={"sourceID": "s"}))
     respx.get(f"{BASE}/v1/projects/my-app").mock(

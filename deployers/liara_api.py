@@ -382,7 +382,9 @@ class LiaraApiDeployer:
         self._log(f"update-envs: {len(variables)} variable(s) for {app}")
         resp = self._request("POST", "/v1/projects/update-envs",
                              json_body={"project": app, "variables": variables})
-        if resp.status_code == 200:
+        # VERIFIED live 2026-10-22: this endpoint returns 201 {"message":"success"}
+        # (not 200!) — accepting only 200 silently failed EVERY real deploy.
+        if resp.status_code in (200, 201):
             return None
         return self._http_fail(resp, "update-envs")
 
@@ -478,6 +480,8 @@ class LiaraApiDeployer:
     # ------------------------------------------------------------ misc
 
     def _http_fail(self, resp: httpx.Response, what: str) -> dict:
+        # visibility: every swallowed failure carries its status into the logs
+        self._log(f"{what}: http {resp.status_code} {resp.text[:120]}")
         if resp.status_code == 401:
             return {"ok": False, "kind": "auth_failed",
                     "message": f"{what}: 401 unauthorized (check API token)", "logs": list(self._logs)}
