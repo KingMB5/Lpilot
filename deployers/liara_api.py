@@ -189,6 +189,24 @@ class LiaraApiDeployer:
             self._log(f"metrics fetch failed: {type(e).__name__}")
             return None
 
+    def current_plan(self) -> str | None:
+        """Live planID of the deployed app — VERIFIED field on GET
+        /v1/projects/{name} (ProjectAllDetails.planID). NOTE (T5): the API has
+        NO plan-catalog/pricing endpoint, so plan CATALOG and PRICES can never
+        be read live — data/prices.yaml stays the static fallback and the UI
+        keeps the UNVERIFIED badge on cost. Only the app's OWN planID is live."""
+        if self.dry_run or not self._app_name or not self._api_token:
+            return None
+        try:
+            resp = self._request("GET", f"/v1/projects/{self._app_name}")
+            if resp.status_code != 200:
+                return None
+            proj = (resp.json() or {}).get("project") or {}
+            pid = proj.get("planID")
+            return str(pid) if pid else None
+        except httpx.HTTPError:
+            return None
+
     def restart(self) -> dict:
         """VERIFIED endpoint POST /v1/projects/{name}/actions/restart -> 200|401|404.
         Risk tier 2 — callers MUST gate this behind explicit user approval

@@ -10,6 +10,8 @@ docs/METRICS_VERIFICATION.md. These tests pin the READ-ONLY contract:
 
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 import respx
@@ -165,3 +167,23 @@ def test_monitor_endpoint_unknown_session():
     c = TestClient(app)
     resp = c.get("/api/sessions/deadbeef/monitor")
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------- T5: plans
+
+@respx.mock
+def test_current_plan_live_read_only_app_planid():
+    """T5: the API has NO plan-catalog endpoint (docs/METRICS_VERIFICATION.md).
+    The only live plan fact is the deployed app's own planID from the VERIFIED
+    GET /v1/projects/{name} response. Prices stay static-fallback (prices.yaml)."""
+    route = respx.get(f"{BASE}/v1/projects/my-app").mock(
+        return_value=httpx.Response(200, json={"project": {"planID": "g2", "status": "running"}}))
+    d = deployer()
+    assert d.current_plan() == "g2"
+    assert route.called
+    # prices.yaml remains all-UNVERIFIED fallback — structural guarantee
+    import yaml
+    import pathlib
+    prices = yaml.safe_load((pathlib.Path(__file__).resolve().parent.parent / "data" / "prices.yaml").read_text(encoding="utf-8"))
+    flat = json.dumps(prices)
+    assert "UNVERIFIED" in flat

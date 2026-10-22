@@ -73,8 +73,14 @@ def sample_now(session) -> dict:
         metrics = deployer.metrics_summary()
         if metrics is not None:
             probe = _url_response_ms(url)
+            plan_id = None
+            try:
+                plan_id = deployer.current_plan()  # live planID (T5) — the only
+                # live plan fact: the catalog/prices endpoint does NOT exist
+            except Exception:  # noqa: BLE001
+                plan_id = None
             return {**base, "source": "liara_api", "label": "UNVERIFIED",
-                    "metrics": metrics, "probe": probe}
+                    "plan_id": plan_id, "metrics": metrics, "probe": probe}
 
     # 2) Inference path — existing evidence only, explicitly labelled
     status = deployer.status() if deployer is not None else {}
