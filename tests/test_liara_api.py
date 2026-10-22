@@ -469,7 +469,8 @@ def test_release_unhealthy_reports_failure(tmp_path):
     res = deployer().deploy({"app_name": "my-app", "platform": "node", "port": 3000,
                              "env": {}, "required_env": [], "prepared_files": [],
                              "disks": [], "project_dir": tmp_project()})
-    assert res["ok"] is False and res["kind"] == "build_failed"
+    # UNHEALTHY routes to unhealthy_url (same evidence family as a dead URL)
+    assert res["ok"] is False and res["kind"] == "unhealthy_url"
     assert "UNHEALTHY" in res["message"]
 
 
