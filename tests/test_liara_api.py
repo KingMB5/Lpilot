@@ -105,8 +105,8 @@ def test_success_flow_creates_app_disk_envs_and_uploads(tmp_path):
     create_body = json.loads(create.calls.last.request.content)
     assert create_body == {"name": "my-app", "planID": PLAN, "platform": "node",
                            "bundlePlanID": "basic", "network": "net-123"}
-    # disk body: string size per spec
-    assert json.loads(disk.calls.last.request.content) == {"name": "database", "size": "1G"}
+    # disk body: NUMBER of GB (VERIFIED live 2026-10-22 — "1G" is rejected)
+    assert json.loads(disk.calls.last.request.content) == {"name": "database", "size": 1}
     # env VALUES go to update-envs and nowhere else
     env_body = json.loads(envs.calls.last.request.content)
     assert env_body["project"] == "my-app"

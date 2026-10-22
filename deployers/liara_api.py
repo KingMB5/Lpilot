@@ -73,7 +73,14 @@ class LiaraApiDeployer:
         self._api_token = (api_token or os.getenv("LIARA_API_TOKEN", "")).strip()
         self.base_url = (base_url or os.getenv("LIARA_API_BASE_URL", "https://api.liara.ir")).rstrip("/")
         self.plan_id = (plan_id if plan_id is not None else os.getenv("LIARA_PLAN_ID", "")).strip()
-        self.disk_size = (disk_size if disk_size is not None else os.getenv("LIARA_DISK_SIZE", "1G")).strip()
+        self.disk_size = (disk_size if disk_size is not None else os.getenv("LIARA_DISK_SIZE", "1")).strip()
+        # VERIFIED live 2026-10-22: disk "size" must be a NUMBER of GB
+        # (400 '"size" must be a number' on "1G"; size:1 -> 201 +
+        # reservedDiskSpace: 1 on the app). Parsed once, here.
+        try:
+            self.disk_size_gb = int(float(self.disk_size))
+        except ValueError:
+            self.disk_size_gb = None
         # Team context + create-time extras (VERIFIED live 2026-10-22, see module doc).
         self.team_id = (team_id if team_id is not None else os.getenv("LIARA_TEAM_ID", "")).strip()
         self.network_id = (network_id if network_id is not None else os.getenv("LIARA_NETWORK_ID", "")).strip()
@@ -340,10 +347,14 @@ class LiaraApiDeployer:
             if d["name"] in existing:
                 self._log(f"disk exists: {d['name']}")
                 continue
-            # VERIFIED body {name: string, size: string}; size units UNVERIFIED.
-            self._log(f"create disk: {d['name']} size={self.disk_size}")
+            # VERIFIED live: body {name: string, size: NUMBER of GB} ("1G" -> 400).
+            if self.disk_size_gb is None:
+                return {"ok": False, "kind": "bad_config",
+                        "message": f"LIARA_DISK_SIZE={self.disk_size!r} invalid — the live API needs a NUMBER of GB (e.g. 1)",
+                        "logs": list(self._logs)}
+            self._log(f"create disk: {d['name']} size={self.disk_size_gb}GB")
             resp = self._request("POST", f"/v1/projects/{app}/disks",
-                                 json_body={"name": d["name"], "size": self.disk_size})
+                                 json_body={"name": d["name"], "size": self.disk_size_gb})
             if resp.status_code not in (200, 201):
                 return self._http_fail(resp, f"create disk {d['name']}")
         return None
@@ -443,8 +454,8 @@ class LiaraApiDeployer:
         for d in config.get("disks") or []:
             reqs.append({"op": "create_disk", "method": "POST",
                          "path": f"/v1/projects/{app}/disks",
-                         "json": {"name": str(d.get("name", "")), "size": self.disk_size},
-                         "note": "size units UNVERIFIED"})
+                         "json": {"name": str(d.get("name", "")), "size": self.disk_size_gb},
+                         "note": "size = NUMBER of GB (VERIFIED live 2026-10-22)"})
         if env:
             reqs.append({"op": "update_envs", "method": "POST", "path": "/v1/projects/update-envs",
                          "json": {"project": app,

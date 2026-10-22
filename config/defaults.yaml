@@ -1,417 +1,356 @@
-# LiaraPilot deterministic configuration.
-# Rule (AGENTS.md): never invent prices, limits or API behavior.
-# VERIFIED facts carry source URL + checked date. Everything else stays UNVERIFIED.
-
 limits:
   max_upload_mb: 25
-  max_files: 4000            # max entries in an uploaded zip
-  max_total_extract_mb: 120  # uncompressed size cap
-  fix_attempts_max: 3        # agent self-fix loop cap (enforced in code)
-
+  max_files: 4000
+  max_total_extract_mb: 120
+  fix_attempts_max: 3
 llm:
-  max_tokens_per_run: 60000  # approximate per-run budget, enforced in code (T11)
+  max_tokens_per_run: 60000
   request_timeout_s: 30
-
 monitor:
-  interval_s: 30       # poll period after a successful deploy (env MONITOR_INTERVAL_S)
-  history_n: 30        # short in-RAM history per session (env MONITOR_HISTORY_N)
-  alert_after: 2       # consecutive unhealthy samples before an alert (env MONITOR_ALERT_AFTER)
-  max_lifetime_samples: 600  # hard stop for long-running sessions
-
+  interval_s: 30
+  history_n: 30
+  alert_after: 2
+  max_lifetime_samples: 600
 deploy:
   timeout_s: 600
   verify_timeout_s: 10
-  verify_path: "/"
-  http_timeout_s: 30          # per-request timeout for the PaaS API
-  poll_interval_s: 5          # app-status polling while a deploy builds
-  max_retries: 3              # our policy for 429/5xx/timeout (NOT documented API behavior)
-  platform_values:            # VERIFIED: config fact liara_json_platform_values
-    [node, next, laravel, php, python, django, flask, dotnet, react, angular, vue, static, docker]
-  source_zip_exclude:         # never travel inside the uploaded artifact (.env = secrets)
-    [node_modules, .next, .git, __pycache__, .turbo, .cache, coverage, .vercel,
-     .env, .DS_Store, "*.pyc", "*.pyo", "*.log", "*.sqlite", "*.db"]
-
+  verify_path: /
+  http_timeout_s: 30
+  poll_interval_s: 5
+  max_retries: 3
+  platform_values:
+  - node
+  - next
+  - laravel
+  - php
+  - python
+  - django
+  - flask
+  - dotnet
+  - react
+  - angular
+  - vue
+  - static
+  - docker
+  source_zip_exclude:
+  - node_modules
+  - .next
+  - .git
+  - __pycache__
+  - .turbo
+  - .cache
+  - coverage
+  - .vercel
+  - .env
+  - .DS_Store
+  - '*.pyc'
+  - '*.pyo'
+  - '*.log'
+  - '*.sqlite'
+  - '*.db'
 security:
-  # SDKs known/expected to depend on their original vendor environment.
   vendor_sdk_packages:
-    - z-ai-web-dev-sdk
+  - z-ai-web-dev-sdk
   secret_key_patterns:
-    - password
-    - passwd
-    - secret
-    - token
-    - api_key
-    - apikey
-    - admin_password
-  # Values that look like placeholders and are NOT flagged as hardcoded secrets.
-  placeholder_value_prefixes: ["changeme", "change-me", "your-", "example", "xxx", "todo", "insert-", "<", "${", "rep"]
+  - password
+  - passwd
+  - secret
+  - token
+  - api_key
+  - apikey
+  - admin_password
+  placeholder_value_prefixes:
+  - changeme
+  - change-me
+  - your-
+  - example
+  - xxx
+  - todo
+  - insert-
+  - <
+  - ${
+  - rep
   secret_min_value_len: 6
-
 demo:
-  # DEMO_MODE=1 (env) forces FakeLLM + MockDeployer regardless of other settings.
-  mock_failures: [bad_port, missing_env_var]   # canned MockDeployer failure sequence
+  mock_failures:
+  - bad_port
+  - missing_env_var
   mock_port: 8080
   mock_env_var: DATABASE_URL
-
 verified_facts:
-  - id: billing_endpoint_real
-    fact: >-
-      GET /v1/billing (documented outside paas.yaml) returns 200 with
-      {user:{balance,accountType,minCreditAmount,isManualMinCredit}}; live
-      account shows balance 0 — this is why app creation returns 402
-    status: VERIFIED
-    source: "real HTTP call 200, 2026-10-22"
-    checked: "2026-10-22"
-
-  - id: plan_ids_real
-    fact: >-
-      Valid planID values enumerated by the live API's own 400 validation
-      message: ir-small, ir-medium, standard-base, standard-plus, pro, pro-plus,
-      pro-max, small-g2, medium-g2, standard-base-g2, standard-plus-g2, pro-g2,
-      pro-plus-g2, pro-max-g2, express-g2 — smallest is ir-small
-    status: VERIFIED
-    source: "real HTTP call POST /v1/projects with invalid planID -> 400 listing, 2026-10-22"
-    checked: "2026-10-22"
-
-  - id: create_app_402_zero_balance
-    fact: >-
-      POST /v1/projects on a zero-balance account returns 402
-      {"message":"Not enough balance."}; downstream steps fail with
-      project_not_found until credit exists
-    status: VERIFIED
-    source: "real HTTP call 402, 2026-10-22"
-    checked: "2026-10-22"
-  - id: boxapi_endpoint_reachable
-    fact: >-
-      https://ai.boxapi.ir/ai/v1 answers /models and /chat/completions with 401
-      and OpenAI-shaped error JSON (type: proxy_error) without a key — endpoint
-      exists, reachable, OpenAI-compatible surface confirmed
-    status: VERIFIED
-    source: "real HTTP probe 401 (no key held in sandbox), 2026-10-22"
-    checked: "2026-10-22"
-  - id: liara_http_api
-    fact: >-
-      Documented OpenAPI HTTP API exists (base https://api.liara.ir, auth
-      "Authorization: Bearer $TOKEN", API keys from console menu "API").
-      Relevant endpoints: POST /v2/projects/{name}/sources (deploy source code),
-      GET /v1/projects/{name}/logs (app logs), POST /v1/projects/update-envs,
-      apps create/delete/restart/turn-on-off, disks create/resize, plus
-      wss://api.liara.ir?token=...&cmd=/bin/bash&project_id=... real-time shell.
-    source: "https://developers.liara.ir/llms.txt"
-    checked: "2026-10-20"
-  - id: paas_api_auth
-    fact: >-
-      PaaS OpenAPI spec (openapi 3.0.1) root security accepts jwt (apiKey named
-      Authorization in header) OR bearerAuth (http bearer, JWT format). We send
-      "Authorization: Bearer <token>". Base server: https://api.liara.ir
-    source: "https://developers.liara.ir/spec/paas.yaml"
-    checked: "2026-10-20"
-  - id: paas_api_endpoints
-    fact: >-
-      Exact request/response shapes from the spec —
-      POST /v1/projects  body {name, planID, platform, readOnlyRootFilesystem?, network?}
-        -> 200|400|401|409 (createApp; body schema declares NO required fields;
-        name/planID/platform are needed in practice).
-      GET /v1/projects/{name} -> {project: {project_id, type, status,
-        defaultSubdomain(bool), envs:[{key,value,encrypted}], planID, ...}} (getAppByName).
-      POST /v2/projects/{name}/sources  multipart/form-data, required field "file"
-        (binary) -> 200 {sourceID} (sourcesDeploy).
-      POST /v1/projects/update-envs  body {project, variables:[{key,value}]}
-        -> 200 {message} (updateEnvs).
-      POST /v1/projects/{name}/disks  body {name: string, size: string} -> 201
-        (createDisk; size is a STRING).
-      GET /v1/projects/{id}/disks -> {disks:[{_id,name,size,updatedAt,createdAt}],
-        mounts:[{name, mountedTo}]} (getDisks).
-      GET /v1/projects/{name}/logs?since=... -> array of {type, datetime, message}
-        (getAppLogs).
-    source: "https://developers.liara.ir/spec/paas.yaml"
-    checked: "2026-10-20"
-  - id: paas_api_error_codes
-    fact: >-
-      Declared error responses per endpoint are 400/401/404 (+409 on createApp);
-      429 and 5xx are NOT declared. Retry-with-backoff on 429/5xx/timeout is
-      LiaraPilot's own policy, not documented API behavior.
-    source: "https://developers.liara.ir/spec/paas.yaml"
-    checked: "2026-10-20"
-  - id: metrics_endpoints
-    fact: >-
-      Resource metrics EXIST in the spec (tag Reports): GET
-      /v1/projects/{name}/metrics/summary (no params) -> {cpuUsage:[{value,
-      applet}], memoryUsage:[...], disksUsage:[{size, usage, reportedAt, name}]};
-      GET /v1/projects/{name}/metrics/cpu | memory | network-receive |
-      network-transmit with REQUIRED query param since (type number) ->
-      Reports {end, result:[{values, applet}]}. Errors 400/401/404.
-      Real response VALUES/units not yet observed — labelled UNVERIFIED in UI
-      until a live read succeeds.
-    source: "config/spec/paas.yaml (snapshot of developers.liara.ir/spec/paas.yaml)"
-    checked: "2026-10-20"
-  - id: restart_endpoint
-    fact: >-
-      POST /v1/projects/{name}/actions/restart -> 200 "request submitted" | 401 | 404
-    source: "config/spec/paas.yaml (line ~183)"
-    checked: "2026-10-20"
-  - id: resize_plan_endpoint
-    fact: >-
-      POST /v1/projects/{name}/resize body {planID} (required) -> 200|400|401|404
-      (changePlan). Plan catalog/list endpoint DOES NOT exist in the spec —
-      planID values and prices cannot be read live from this API.
-    source: "config/spec/paas.yaml (line ~472); grep evidence in docs/METRICS_VERIFICATION.md"
-    checked: "2026-10-20"
-  - id: scale_onoff_endpoint
-    fact: >-
-      POST /v1/projects/{name}/actions/scale body {scale: number}; description:
-      "Return 1 to turn on or 0 to turn off" -> 200|401|404 (turnApp)
-    source: "config/spec/paas.yaml (line ~146)"
-    checked: "2026-10-20"
-  - id: apps_list_endpoint
-    fact: >-
-      GET /v1/projects -> Projects schema (all apps owned by the token) | 401 | 404
-    source: "config/spec/paas.yaml (line ~47)"
-    checked: "2026-10-20"
-  - id: destructive_endpoints
-    fact: >-
-      DELETE /v1/projects/{name} (deleteAppByName) and DELETE
-      /v1/projects/{id}/disks/{name} EXIST — LiaraPilot never calls them; they
-      map to risk tier 3 (forbidden / manual-only) in docs/ARCHITECTURE.md
-    source: "config/spec/paas.yaml (paths at ~93 and ~861)"
-    checked: "2026-10-20"
-  - id: logs_since_required
-    fact: >-
-      GET /v1/projects/{name}/logs REQUIRES query param since (type string,
-      description "Show logs since timestamp"); value format still UNVERIFIED —
-      LIARA_LOGS_SINCE env (default "0"), adjust if the live API rejects it
-    source: "config/spec/paas.yaml (line ~957)"
-    checked: "2026-10-20"
-
+- id: billing_endpoint_real
+  fact: GET /v1/billing (documented outside paas.yaml) returns 200 with {user:{balance,accountType,minCreditAmount,isManualMinCredit}};
+    live account shows balance 0 — this is why app creation returns 402
+  status: VERIFIED
+  source: real HTTP call 200, 2026-10-22
+  checked: '2026-10-22'
+- id: plan_ids_real
+  fact: 'Valid planID values enumerated by the live API''s own 400 validation message: ir-small, ir-medium,
+    standard-base, standard-plus, pro, pro-plus, pro-max, small-g2, medium-g2, standard-base-g2, standard-plus-g2,
+    pro-g2, pro-plus-g2, pro-max-g2, express-g2 — smallest is ir-small'
+  status: VERIFIED
+  source: real HTTP call POST /v1/projects with invalid planID -> 400 listing, 2026-10-22
+  checked: '2026-10-22'
+- id: create_app_402_zero_balance
+  fact: POST /v1/projects on a zero-balance account returns 402 {"message":"Not enough balance."}; downstream
+    steps fail with project_not_found until credit exists
+  status: VERIFIED
+  source: real HTTP call 402, 2026-10-22
+  checked: '2026-10-22'
+- id: boxapi_endpoint_reachable
+  fact: 'https://ai.boxapi.ir/ai/v1 answers /models and /chat/completions with 401 and OpenAI-shaped error
+    JSON (type: proxy_error) without a key — endpoint exists, reachable, OpenAI-compatible surface confirmed'
+  status: VERIFIED
+  source: real HTTP probe 401 (no key held in sandbox), 2026-10-22
+  checked: '2026-10-22'
+- id: liara_http_api
+  fact: 'Documented OpenAPI HTTP API exists (base https://api.liara.ir, auth "Authorization: Bearer $TOKEN",
+    API keys from console menu "API"). Relevant endpoints: POST /v2/projects/{name}/sources (deploy source
+    code), GET /v1/projects/{name}/logs (app logs), POST /v1/projects/update-envs, apps create/delete/restart/turn-on-off,
+    disks create/resize, plus wss://api.liara.ir?token=...&cmd=/bin/bash&project_id=... real-time shell.'
+  source: https://developers.liara.ir/llms.txt
+  checked: '2026-10-20'
+- id: paas_api_auth
+  fact: 'PaaS OpenAPI spec (openapi 3.0.1) root security accepts jwt (apiKey named Authorization in header)
+    OR bearerAuth (http bearer, JWT format). We send "Authorization: Bearer <token>". Base server: https://api.liara.ir'
+  source: https://developers.liara.ir/spec/paas.yaml
+  checked: '2026-10-20'
+- id: paas_api_endpoints
+  fact: "Exact request/response shapes from the spec — POST /v1/projects  body {name, planID, platform,\
+    \ readOnlyRootFilesystem?, network?}\n  -> 200|400|401|409 (createApp; body schema declares NO required\
+    \ fields;\n  name/planID/platform are needed in practice).\nGET /v1/projects/{name} -> {project: {project_id,\
+    \ type, status,\n  defaultSubdomain(bool), envs:[{key,value,encrypted}], planID, ...}} (getAppByName).\n\
+    POST /v2/projects/{name}/sources  multipart/form-data, required field \"file\"\n  (binary) -> 200\
+    \ {sourceID} (sourcesDeploy).\nPOST /v1/projects/update-envs  body {project, variables:[{key,value}]}\n\
+    \  -> 200 {message} (updateEnvs).\nPOST /v1/projects/{name}/disks  body {name: string, size: string}\
+    \ -> 201\n  (createDisk; size is a STRING).\nGET /v1/projects/{id}/disks -> {disks:[{_id,name,size,updatedAt,createdAt}],\n\
+    \  mounts:[{name, mountedTo}]} (getDisks).\nGET /v1/projects/{name}/logs?since=... -> array of {type,\
+    \ datetime, message}\n  (getAppLogs)."
+  source: https://developers.liara.ir/spec/paas.yaml
+  checked: '2026-10-20'
+- id: paas_api_error_codes
+  fact: Declared error responses per endpoint are 400/401/404 (+409 on createApp); 429 and 5xx are NOT
+    declared. Retry-with-backoff on 429/5xx/timeout is LiaraPilot's own policy, not documented API behavior.
+  source: https://developers.liara.ir/spec/paas.yaml
+  checked: '2026-10-20'
+- id: metrics_endpoints
+  fact: 'Resource metrics EXIST in the spec (tag Reports): GET /v1/projects/{name}/metrics/summary (no
+    params) -> {cpuUsage:[{value, applet}], memoryUsage:[...], disksUsage:[{size, usage, reportedAt, name}]};
+    GET /v1/projects/{name}/metrics/cpu | memory | network-receive | network-transmit with REQUIRED query
+    param since (type number) -> Reports {end, result:[{values, applet}]}. Errors 400/401/404. Real response
+    VALUES/units not yet observed — labelled UNVERIFIED in UI until a live read succeeds.'
+  source: config/spec/paas.yaml (snapshot of developers.liara.ir/spec/paas.yaml)
+  checked: '2026-10-20'
+- id: restart_endpoint
+  fact: POST /v1/projects/{name}/actions/restart -> 200 "request submitted" | 401 | 404
+  source: config/spec/paas.yaml (line ~183)
+  checked: '2026-10-20'
+- id: resize_plan_endpoint
+  fact: POST /v1/projects/{name}/resize body {planID} (required) -> 200|400|401|404 (changePlan). Plan
+    catalog/list endpoint DOES NOT exist in the spec — planID values and prices cannot be read live from
+    this API.
+  source: config/spec/paas.yaml (line ~472); grep evidence in docs/METRICS_VERIFICATION.md
+  checked: '2026-10-20'
+- id: scale_onoff_endpoint
+  fact: 'POST /v1/projects/{name}/actions/scale body {scale: number}; description: "Return 1 to turn on
+    or 0 to turn off" -> 200|401|404 (turnApp)'
+  source: config/spec/paas.yaml (line ~146)
+  checked: '2026-10-20'
+- id: apps_list_endpoint
+  fact: GET /v1/projects -> Projects schema (all apps owned by the token) | 401 | 404
+  source: config/spec/paas.yaml (line ~47)
+  checked: '2026-10-20'
+- id: destructive_endpoints
+  fact: DELETE /v1/projects/{name} (deleteAppByName) and DELETE /v1/projects/{id}/disks/{name} EXIST —
+    LiaraPilot never calls them; they map to risk tier 3 (forbidden / manual-only) in docs/ARCHITECTURE.md
+  source: config/spec/paas.yaml (paths at ~93 and ~861)
+  checked: '2026-10-20'
+- id: logs_since_required
+  fact: GET /v1/projects/{name}/logs REQUIRES query param since (type string, description "Show logs since
+    timestamp"); value format still UNVERIFIED — LIARA_LOGS_SINCE env (default "0"), adjust if the live
+    API rejects it
+  source: config/spec/paas.yaml (line ~957)
+  checked: '2026-10-20'
+- id: plan_id_values
+  fact: 'Real planIDs come from the live catalog GET /v1/me (see plans_catalog_at_v1_me: small-g2, ir-small,
+    medium-g2, standard-*-g2, pro-*-g2, express-g2). The deployer still REQUIRES an explicit LIARA_PLAN_ID
+    for app creation so no credit is spent by accident'
+  status: VERIFIED
+  source: real HTTP call GET /v1/me?teamID=... -> 200 catalog, 2026-10-22
+  checked: '2026-10-22'
+- id: disk_size_units
+  fact: 'createDisk "size" must be a NUMBER of GB — "1G" returns 400 {"message":"size must be a number"};
+    size 1 returns 201 and the app reports reservedDiskSpace: 1. Default LIARA_DISK_SIZE=1'
+  status: VERIFIED
+  source: real calls 2026-10-22 (400 on string, 201 on number, reservedDiskSpace=1)
+  checked: '2026-10-22'
 unverified_facts:
-  - id: pricing
-    fact: "All Liara plan/disk/egress prices"
-    status: UNVERIFIED
-  - id: plan_id_values
-    fact: >-
-      Plan catalog IDs usable as createApp planID (e.g. g1/g2/h1...) are NOT in
-      the spec; LIARA_PLAN_ID env must be provided by the operator (console shows it)
-    status: UNVERIFIED
-  - id: disk_size_units
-    fact: >-
-      createDisk "size" is declared string but units (e.g. "1G" vs bytes) are not
-      specified; default from LIARA_DISK_SIZE env
-    status: UNVERIFIED
-  - id: app_status_strings
-    fact: >-
-      Possible values of project.status (polling matcher uses best-effort sets
-      running/ok/ready/... vs failed/error/...); to be confirmed on Thursday
-    status: UNVERIFIED
-  - id: default_subdomain_url
-    fact: >-
-      Live URL format assumed https://{app-name}.liara.run; not found in spec or
-      static docs pages (SPA). Verify Thursday from a real deploy/getAppByName
-    status: UNVERIFIED
-  - id: sources_deploy_semantics
-    fact: >-
-      Whether POST /v2/projects/{name}/sources triggers build+release and honors
-      liara.json (platform/port/disks) inside the uploaded zip (CLI presumably
-      does this); no explicit statement in spec
-    status: UNVERIFIED
-  - id: disk_mount_mechanism
-    fact: >-
-      API has no "attach disk" endpoint; mounting is assumed to happen at deploy
-      time from liara.json disks:[{name, mountTo}] (matches docs.liara.ir SQLite guide)
-    status: UNVERIFIED
-  - id: logs_since_format
-    fact: >-
-      Value format of the REQUIRED getAppLogs `since` param (string) — sending
-      LIARA_LOGS_SINCE (default "0"); adjust live if rejected
-    status: UNVERIFIED
-  - id: metrics_values_semantics
-    fact: >-
-      Units/scaling of metrics values (cpuUsage/memoryUsage arrays, applet
-      labels, disksUsage usage vs size strings) not observable from the spec —
-      first live read fills this; until then values shown as-is with an
-      UNVERIFIED badge and treated as inference only
-    status: UNVERIFIED
-  - id: deploy_sources_payload
-    fact: >-
-      Superseded by paas_api_endpoints (multipart field "file" verified); build
-      log streaming during upload still unobserved
-    status: UNVERIFIED
-  - id: python_platform_build_run
-    fact: >-
-      How Liara's Python buildpack detects build/run commands for the agent's own
-      deploy (requirements.txt / Procfile / liara.json fields) — not in paas.yaml
-      or verified docs; agent ships liara.json {platform: python, port: 3000} +
-      requirements.txt + uvicorn run command
-    status: UNVERIFIED
-  - id: liara_json_healthcheck_field
-    fact: >-
-      Whether liara.json supports a healthCheck declaration and its schema;
-      agent exposes GET /api/health regardless
-    status: UNVERIFIED
-  - id: port_env_var
-    fact: "Whether Liara injects a PORT env var that the app must bind at runtime"
-    status: UNVERIFIED
-  - id: prisma_sqlite_on_liara
-    fact: "Whether Prisma+SQLite works reliably on a mounted disk on Liara"
-    status: UNVERIFIED
-  - id: cli_exit_codes
-    fact: "liara deploy exit codes and machine-readable output for failure parsing"
-    status: UNVERIFIED
-  - id: cli_log_access
-    fact: >-
-      CLI log access: superseded by verified HTTP API GET /v1/projects/{name}/logs;
-      CLI flag still unverified
-    status: UNVERIFIED
-  - id: cli_deploy_flags
-    fact: >-
-      liara deploy accepts --api-token, --path, --platform, -a/--app, -p/--port,
-      --detach, --no-app-logs, --build-arg, --no-cache, -b iran|germany,
-      --team-id, --liara-json
-    source: "https://docs.liara.ir/references/cli/deploy-app/"
-    checked: "2026-10-20"
-    status: UNVERIFIED
-    note: >-
-      DOWNGRADED 2026-10-22 — source was documentation only; rule: a fact is VERIFIED
-      only by a real successful API call or by presence in config/spec/paas.yaml
-
-  - id: liara_cli_ops_surface
-    fact: >-
-      Liara CLI documented surface covers: app create/delete/list, deploy,
-      start/stop, restart, logs, env var get/set/delete, disks, databases,
-      domains, accounts — the same operation families LiaraApiDeployer uses via
-      the HTTP API (the CLI is a client of api.liara.ir). Confirms our deployer
-      op-set is real-platform backed; HTTP endpoints themselves verified in
-      config/spec/paas.yaml.
-    source: "https://docs.liara.ir/references/cli/about/ (sidebar + intro)"
-    checked: 2026-10-22
-    status: UNVERIFIED
-    note: >-
-      DOWNGRADED 2026-10-22 — source was documentation only; rule: a fact is VERIFIED
-      only by a real successful API call or by presence in config/spec/paas.yaml
-
-  - id: node_sqlite_needs_disk
-    fact: >-
-      SQLite on Liara Node.js apps requires creating a disk and mounting it via
-      liara.json; official example uses the raw sqlite3 module, not Prisma
-    source: "https://docs.liara.ir/paas/nodejs/how-tos/connect-to-db/sqlite/"
-    checked: "2026-10-20"
-    status: UNVERIFIED
-    note: >-
-      DOWNGRADED 2026-10-22 — source was documentation only; rule: a fact is VERIFIED
-      only by a real successful API call or by presence in config/spec/paas.yaml
-
-  - id: prisma_guide_is_postgres
-    fact: "Official Liara Prisma guide uses PostgreSQL only"
-    source: "https://docs.liara.ir/paas/nodejs/how-tos/connect-to-db/prisma/"
-    checked: "2026-10-20"
-    status: UNVERIFIED
-    note: >-
-      DOWNGRADED 2026-10-22 — source was documentation only; rule: a fact is VERIFIED
-      only by a real successful API call or by presence in config/spec/paas.yaml
-
-  - id: no_official_nextjs_guide
-    fact: >-
-      No official Next.js guide listed under Liara Node platform docs
-      (Nuxt, Remix, Nitro, NestJS guides exist)
-    source: "https://docs.liara.ir/paas/nodejs/getting-started/"
-    checked: "2026-10-20"
-    status: UNVERIFIED
-    note: >-
-      DOWNGRADED 2026-10-22 — source was documentation only; rule: a fact is VERIFIED
-      only by a real successful API call or by presence in config/spec/paas.yaml
-
-  - id: liara_json_platform_values
-    fact: >-
-      liara.json "platform" accepts exactly: node, next, laravel, php, python,
-      django, flask, dotnet, react, angular, vue, static, docker ("next" IS official);
-      wrong value aborts deploy. "port" field also supported.
-    source: "https://docs.liara.ir/paas/liarajson/"
-    checked: "2026-10-20"
-    status: UNVERIFIED
-    note: >-
-      DOWNGRADED 2026-10-22 — source was documentation only; rule: a fact is VERIFIED
-      only by a real successful API call or by presence in config/spec/paas.yaml
-
-  - id: liara_json_disks_schema
-    fact: 'liara.json disks schema: {"disks":[{"name":"database","mountTo":"db"}]}'
-    source: "https://docs.liara.ir/paas/nodejs/how-tos/connect-to-db/sqlite/"
-    checked: "2026-10-20"
-    status: UNVERIFIED
-    note: >-
-      DOWNGRADED 2026-10-22 — source was documentation only; rule: a fact is VERIFIED
-      only by a real successful API call or by presence in config/spec/paas.yaml
-
-  - id: deployer_recommendation
-    fact: >-
-      Pure-Python LiaraApiDeployer via the HTTP API is viable and preferred
-      (no Node runtime needed); LiaraCliDeployer stays as fallback. Deploy-sources
-      payload/auth details must be re-checked against the OpenAPI spec (paas.yaml)
-      before Thursday implementation.
-    source: "https://developers.liara.ir/pass/deploy/deploy-sources-code.md"
-    checked: "2026-10-20"
-    status: UNVERIFIED
-    note: >-
-      DOWNGRADED 2026-10-22 — source was documentation only; rule: a fact is VERIFIED
-      only by a real successful API call or by presence in config/spec/paas.yaml
-  - id: boxapi_model_name
-    fact: >-
-      Default model gpt-5.4-mini verified by a real completion call via BoxAPI
-      (2026-10-22): "PONG" round-trip, then a full product golden-path run with
-      the real LLM (plan, approval gate, report — see docs/VERIFIED_MATRIX.md
-      BoxAPI section). Model rejects legacy max_tokens (wants
-      max_completion_tokens); our client sends neither -> compatible. Any
-      dashboard model remains selectable via LLM_MODEL
-    status: VERIFIED
-    source: "real HTTP call POST /v1/chat/completions -> 200 PONG + full product run, 2026-10-22"
-    checked: "2026-10-22"
-    note: embeddings models are not chat-capable; switch models via LLM_MODEL env
-  - id: plans_catalog_absent
-    fact: >-
-      The GUESS path /v1/plans does not exist: GET /v1/plans returns 404
-      {"error":"Not Found"} against the live API (the catalog itself lives at
-      GET /v1/me — see plans_catalog_at_v1_me)
-    status: VERIFIED
-    source: "real HTTP call GET /v1/plans -> 404, 2026-10-22"
-    checked: "2026-10-22"
-  - id: plans_catalog_at_v1_me
-    fact: >-
-      The REAL plan+price catalog is GET /v1/me — plans.projects (RAM, CPU,
-      volume, price Toman/hour, storageClass, region, available) plus
-      plans.projectBundlePlans. Cheapest available iran plan observed:
-      small-g2 (0.5 vCPU / 0.5GB / 5GB, 659.72 Toman/h); ir-small 1319.44
-      Toman/h. The official CLI reads its plan prompt from here too
-      (src/commands/app/create.ts)
-    status: VERIFIED
-    source: "real HTTP call GET /v1/me?teamID=... -> 200 full catalog, 2026-10-22; liara-cloud/cli source"
-    checked: "2026-10-22"
-  - id: team_context_query_param
-    fact: >-
-      Team context travels as a teamID QUERY PARAM on every API request
-      (official CLI sets it via its setGotConfig searchParams hook). With it,
-      GET /v1/billing returns {user:{balance}, team:{balance}} — team-scoped
-      credit is real: team balance 2000000 observed while user balance was 0.
-      Without the param, app creation hit 402 Not enough balance even though
-      team credit existed
-    status: VERIFIED
-    source: "real calls with/without ?teamID= 2026-10-22; liara-cloud/cli src/base.ts"
-    checked: "2026-10-22"
-  - id: app_create_network_required
-    fact: >-
-      POST /v1/projects REQUIRES a network id (400 {"message":
-      "network_is_required"}; invalid ids -> 400 "Invalid network id").
-      Networks are listed via GET /v1/networks ({_id, name, projectCount,
-      databaseCount}) and created via POST /v1/networks {networkName} -> 201
-      {network:{_id}} (network 'liarapilot-net' created live). An app create
-      with a valid network returned 200 {projectID}
-    status: VERIFIED
-    source: "real calls 2026-10-22 (402->400->400->201->200 chain) + liara-cloud/cli src/commands/app/create.ts"
-    checked: "2026-10-22"
-  - id: bundle_plan_tiers
-    fact: >-
-      App creation accepts bundlePlanID with values [free, basic, standard,
-      pro] (learned from the live 400 validation message; per-plan
-      availability in plans.projectBundlePlans). Created live with
-      bundlePlanID=basic on plan small-g2; app detail showed
-      bundleHourlyPrice 381.94 Toman/h
-    status: VERIFIED
-    source: "real calls 2026-10-22 (400 enum message + 200 create + GET app details)"
-    checked: "2026-10-22"
+- id: pricing
+  fact: Per-hour plan prices ARE live in GET /v1/me (plans.projects.price, Toman/hour — VERIFIED); disk
+    storage and egress pricing stay UNVERIFIED
+  status: UNVERIFIED
+  note: PARTIALLY VERIFIED 2026-10-22 — plan hourly prices real; disk/egress still unverified
+- id: app_status_strings
+  fact: 'Observed live: project.status == ''ACTIVE'' after create+build (matched by the deployer''s case-insensitive
+    STATUS_OK). Bad-state strings remain unobserved'
+  status: UNVERIFIED
+  note: PARTIALLY VERIFIED 2026-10-22 — 'ACTIVE' seen live; failure strings still best-effort
+- id: default_subdomain_url
+  fact: Live URL format assumed https://{app-name}.liara.run; not found in spec or static docs pages (SPA).
+    Verify Thursday from a real deploy/getAppByName
+  status: UNVERIFIED
+- id: sources_deploy_semantics
+  fact: Whether POST /v2/projects/{name}/sources triggers build+release and honors liara.json (platform/port/disks)
+    inside the uploaded zip (CLI presumably does this); no explicit statement in spec
+  status: UNVERIFIED
+- id: disk_mount_mechanism
+  fact: API has no "attach disk" endpoint; mounting is assumed to happen at deploy time from liara.json
+    disks:[{name, mountTo}] (matches docs.liara.ir SQLite guide)
+  status: UNVERIFIED
+- id: logs_since_format
+  fact: Value format of the REQUIRED getAppLogs `since` param (string) — sending LIARA_LOGS_SINCE (default
+    "0"); adjust live if rejected
+  status: UNVERIFIED
+- id: metrics_values_semantics
+  fact: Units/scaling of metrics values (cpuUsage/memoryUsage arrays, applet labels, disksUsage usage
+    vs size strings) not observable from the spec — first live read fills this; until then values shown
+    as-is with an UNVERIFIED badge and treated as inference only
+  status: UNVERIFIED
+- id: deploy_sources_payload
+  fact: Superseded by paas_api_endpoints (multipart field "file" verified); build log streaming during
+    upload still unobserved
+  status: UNVERIFIED
+- id: python_platform_build_run
+  fact: 'How Liara''s Python buildpack detects build/run commands for the agent''s own deploy (requirements.txt
+    / Procfile / liara.json fields) — not in paas.yaml or verified docs; agent ships liara.json {platform:
+    python, port: 3000} + requirements.txt + uvicorn run command'
+  status: UNVERIFIED
+- id: liara_json_healthcheck_field
+  fact: Whether liara.json supports a healthCheck declaration and its schema; agent exposes GET /api/health
+    regardless
+  status: UNVERIFIED
+- id: port_env_var
+  fact: Whether Liara injects a PORT env var that the app must bind at runtime
+  status: UNVERIFIED
+- id: prisma_sqlite_on_liara
+  fact: Whether Prisma+SQLite works reliably on a mounted disk on Liara
+  status: UNVERIFIED
+- id: cli_exit_codes
+  fact: liara deploy exit codes and machine-readable output for failure parsing
+  status: UNVERIFIED
+- id: cli_log_access
+  fact: 'CLI log access: superseded by verified HTTP API GET /v1/projects/{name}/logs; CLI flag still
+    unverified'
+  status: UNVERIFIED
+- id: cli_deploy_flags
+  fact: liara deploy accepts --api-token, --path, --platform, -a/--app, -p/--port, --detach, --no-app-logs,
+    --build-arg, --no-cache, -b iran|germany, --team-id, --liara-json
+  source: https://docs.liara.ir/references/cli/deploy-app/
+  checked: '2026-10-20'
+  status: UNVERIFIED
+  note: 'DOWNGRADED 2026-10-22 — source was documentation only; rule: a fact is VERIFIED only by a real
+    successful API call or by presence in config/spec/paas.yaml'
+- id: liara_cli_ops_surface
+  fact: 'Liara CLI documented surface covers: app create/delete/list, deploy, start/stop, restart, logs,
+    env var get/set/delete, disks, databases, domains, accounts — the same operation families LiaraApiDeployer
+    uses via the HTTP API (the CLI is a client of api.liara.ir). Confirms our deployer op-set is real-platform
+    backed; HTTP endpoints themselves verified in config/spec/paas.yaml.'
+  source: https://docs.liara.ir/references/cli/about/ (sidebar + intro)
+  checked: 2026-10-22
+  status: UNVERIFIED
+  note: 'DOWNGRADED 2026-10-22 — source was documentation only; rule: a fact is VERIFIED only by a real
+    successful API call or by presence in config/spec/paas.yaml'
+- id: node_sqlite_needs_disk
+  fact: SQLite on Liara Node.js apps requires creating a disk and mounting it via liara.json; official
+    example uses the raw sqlite3 module, not Prisma
+  source: https://docs.liara.ir/paas/nodejs/how-tos/connect-to-db/sqlite/
+  checked: '2026-10-20'
+  status: UNVERIFIED
+  note: 'DOWNGRADED 2026-10-22 — source was documentation only; rule: a fact is VERIFIED only by a real
+    successful API call or by presence in config/spec/paas.yaml'
+- id: prisma_guide_is_postgres
+  fact: Official Liara Prisma guide uses PostgreSQL only
+  source: https://docs.liara.ir/paas/nodejs/how-tos/connect-to-db/prisma/
+  checked: '2026-10-20'
+  status: UNVERIFIED
+  note: 'DOWNGRADED 2026-10-22 — source was documentation only; rule: a fact is VERIFIED only by a real
+    successful API call or by presence in config/spec/paas.yaml'
+- id: no_official_nextjs_guide
+  fact: No official Next.js guide listed under Liara Node platform docs (Nuxt, Remix, Nitro, NestJS guides
+    exist)
+  source: https://docs.liara.ir/paas/nodejs/getting-started/
+  checked: '2026-10-20'
+  status: UNVERIFIED
+  note: 'DOWNGRADED 2026-10-22 — source was documentation only; rule: a fact is VERIFIED only by a real
+    successful API call or by presence in config/spec/paas.yaml'
+- id: liara_json_platform_values
+  fact: 'liara.json "platform" accepts exactly: node, next, laravel, php, python, django, flask, dotnet,
+    react, angular, vue, static, docker ("next" IS official); wrong value aborts deploy. "port" field
+    also supported.'
+  source: https://docs.liara.ir/paas/liarajson/
+  checked: '2026-10-20'
+  status: UNVERIFIED
+  note: 'DOWNGRADED 2026-10-22 — source was documentation only; rule: a fact is VERIFIED only by a real
+    successful API call or by presence in config/spec/paas.yaml'
+- id: liara_json_disks_schema
+  fact: 'liara.json disks schema: {"disks":[{"name":"database","mountTo":"db"}]}'
+  source: https://docs.liara.ir/paas/nodejs/how-tos/connect-to-db/sqlite/
+  checked: '2026-10-20'
+  status: UNVERIFIED
+  note: 'DOWNGRADED 2026-10-22 — source was documentation only; rule: a fact is VERIFIED only by a real
+    successful API call or by presence in config/spec/paas.yaml'
+- id: deployer_recommendation
+  fact: Pure-Python LiaraApiDeployer via the HTTP API is viable and preferred (no Node runtime needed);
+    LiaraCliDeployer stays as fallback. Deploy-sources payload/auth details must be re-checked against
+    the OpenAPI spec (paas.yaml) before Thursday implementation.
+  source: https://developers.liara.ir/pass/deploy/deploy-sources-code.md
+  checked: '2026-10-20'
+  status: UNVERIFIED
+  note: 'DOWNGRADED 2026-10-22 — source was documentation only; rule: a fact is VERIFIED only by a real
+    successful API call or by presence in config/spec/paas.yaml'
+- id: boxapi_model_name
+  fact: 'Default model gpt-5.4-mini verified by a real completion call via BoxAPI (2026-10-22): "PONG"
+    round-trip, then a full product golden-path run with the real LLM (plan, approval gate, report — see
+    docs/VERIFIED_MATRIX.md BoxAPI section). Model rejects legacy max_tokens (wants max_completion_tokens);
+    our client sends neither -> compatible. Any dashboard model remains selectable via LLM_MODEL'
+  status: VERIFIED
+  source: real HTTP call POST /v1/chat/completions -> 200 PONG + full product run, 2026-10-22
+  checked: '2026-10-22'
+  note: embeddings models are not chat-capable; switch models via LLM_MODEL env
+- id: plans_catalog_absent
+  fact: 'The GUESS path /v1/plans does not exist: GET /v1/plans returns 404 {"error":"Not Found"} against
+    the live API (the catalog itself lives at GET /v1/me — see plans_catalog_at_v1_me)'
+  status: VERIFIED
+  source: real HTTP call GET /v1/plans -> 404, 2026-10-22
+  checked: '2026-10-22'
+- id: plans_catalog_at_v1_me
+  fact: 'The REAL plan+price catalog is GET /v1/me — plans.projects (RAM, CPU, volume, price Toman/hour,
+    storageClass, region, available) plus plans.projectBundlePlans. Cheapest available iran plan observed:
+    small-g2 (0.5 vCPU / 0.5GB / 5GB, 659.72 Toman/h); ir-small 1319.44 Toman/h. The official CLI reads
+    its plan prompt from here too (src/commands/app/create.ts)'
+  status: VERIFIED
+  source: real HTTP call GET /v1/me?teamID=... -> 200 full catalog, 2026-10-22; liara-cloud/cli source
+  checked: '2026-10-22'
+- id: team_context_query_param
+  fact: 'Team context travels as a teamID QUERY PARAM on every API request (official CLI sets it via its
+    setGotConfig searchParams hook). With it, GET /v1/billing returns {user:{balance}, team:{balance}}
+    — team-scoped credit is real: team balance 2000000 observed while user balance was 0. Without the
+    param, app creation hit 402 Not enough balance even though team credit existed'
+  status: VERIFIED
+  source: real calls with/without ?teamID= 2026-10-22; liara-cloud/cli src/base.ts
+  checked: '2026-10-22'
+- id: app_create_network_required
+  fact: 'POST /v1/projects REQUIRES a network id (400 {"message": "network_is_required"}; invalid ids
+    -> 400 "Invalid network id"). Networks are listed via GET /v1/networks ({_id, name, projectCount,
+    databaseCount}) and created via POST /v1/networks {networkName} -> 201 {network:{_id}} (network ''liarapilot-net''
+    created live). An app create with a valid network returned 200 {projectID}'
+  status: VERIFIED
+  source: real calls 2026-10-22 (402->400->400->201->200 chain) + liara-cloud/cli src/commands/app/create.ts
+  checked: '2026-10-22'
+- id: bundle_plan_tiers
+  fact: App creation accepts bundlePlanID with values [free, basic, standard, pro] (learned from the live
+    400 validation message; per-plan availability in plans.projectBundlePlans). Created live with bundlePlanID=basic
+    on plan small-g2; app detail showed bundleHourlyPrice 381.94 Toman/h
+  status: VERIFIED
+  source: real calls 2026-10-22 (400 enum message + 200 create + GET app details)
+  checked: '2026-10-22'

@@ -238,12 +238,22 @@ def step_create_app(c, token, app, live: bool) -> Step:
     return st
 
 
+def _disk_size_gb() -> int:
+    """VERIFIED live 2026-10-22: disk size is a NUMBER of GB ("1G" -> 400
+    '"size" must be a number'; size:1 -> 201 + reservedDiskSpace:1)."""
+    raw = os.getenv("LIARA_DISK_SIZE", "1").strip() or "1"
+    try:
+        return int(float(raw))
+    except ValueError:
+        return 1
+
+
 def step_env_and_disk(c, token, app, live: bool) -> Step:
     st = Step("env+disk (POST update-envs, POST disks)", 2)
     if not live:
         st.status = "SKIPPED"
         st.detail = ("DRY-RUN plan (not sent): update-envs {project: %s, variables: [{key: PROBE_VAR, value: ***}]}; "
-                     "disks {name: probe-disk, size: %s}" % (app, os.getenv("LIARA_DISK_SIZE", "1G")))
+                     "disks {name: probe-disk, size: %s (GB)}" % (app, _disk_size_gb()))
         st.raw = "tier-2 — nothing sent without --live"
         return st
     r1 = req(c, st, "POST", "/v1/projects/update-envs",
@@ -252,11 +262,11 @@ def step_env_and_disk(c, token, app, live: bool) -> Step:
         st.status, st.detail = "FAIL", f"update-envs: {st.raw}"
         return st
     r2 = req(c, st, "POST", f"/v1/projects/{app}/disks",
-             json={"name": "probe-disk", "size": os.getenv("LIARA_DISK_SIZE", "1G")})
+             json={"name": "probe-disk", "size": _disk_size_gb()})
     if r2 is None or r2.status_code not in (200, 201):
-        st.status, st.detail = "UNVERIFIED", f"envs ok; disk create: {st.raw} (size units UNVERIFIED)"
+        st.status, st.detail = "UNVERIFIED", f"envs ok; disk create: {st.raw}"
         return st
-    st.status, st.detail = "PASS", "env + disk accepted"
+    st.status, st.detail = "PASS", f"env + disk accepted (size={_disk_size_gb()}GB)"
     return st
 
 

@@ -109,3 +109,21 @@ credit is redeemed on the token's account.
 | 9 | restart (POST /v1/projects/liara-pilot-probe/actions/restart) | 2 | FAIL | http 404 \| raw: http 404 {"statusCode":404,"error":"Not Found","message":"Project not found.","data":null} |
 
 _Tier-3 (delete app/disk) is intentionally absent — the agent never calls it._
+
+---
+## live_check run — 2026-10-22 19:45 UTC (mode: LIVE, app: `liara-pilot-probe`)
+
+| # | Step (endpoint) | Tier | Verdict | Detail / raw evidence |
+|---|-----------------|------|---------|------------------------|
+| 1 | auth+list_apps (GET /v1/projects) | 1 | PASS | token valid; 0 apps visible: [] \| raw: http 200 {"projects":[]} |
+| 2 | plans_catalog (GET /v1/me — real plan+price catalog) | 1 | PASS | catalog live: 15 available iran plans; cheapest=small-g2 (659.72 Toman/h) — real prices, replaces 404 /v1/plans \| raw: http 200 {"user":{"isTeamCreator":true,"_id":"[REDACTED-USERID]","fullname":"[REDACTED-PII]","nationalCode":"[REDACTED-PII]","invoiceIssuingEnabled":true,"email":"[REDACTED-PII]","phone":"[REDACTED-PII]","joined_at":"2026-05-16T14:47:07.366Z","freeCreditTime":-129,"hasPassword":true,"emailVerifiedAt":"202 |
+| 3 | app_details (GET /v1/projects/liara-pilot-probe) | 1 | UNVERIFIED | app 'liara-pilot-probe' does not exist yet (created in tier-2 steps) \| raw: http 404 {"statusCode":404,"error":"Not Found","message":"Not Found","data":null} |
+| 4 | metrics_summary (GET /v1/projects/liara-pilot-probe/metrics/summary) | 1 | UNVERIFIED | app missing OR endpoint path differs live (spec says Reports) \| raw: http 404 {"statusCode":404,"error":"Not Found","message":"Not Found","data":null} |
+| 5 | logs (GET /v1/projects/liara-pilot-probe/logs?since=...) | 1 | UNVERIFIED | app 'liara-pilot-probe' does not exist yet \| raw: http 404 {"statusCode":404,"error":"Not Found","message":"Project not found.","data":null} |
+| 6 | create_app (POST /v1/projects, name=liara-pilot-probe) | 2 | PASS | app created (planID=small-g2, bundle=basic, network resolved) \| raw: http 200 {"projectID":"6ada67d0aa8f2ba374d04af9"} |
+| 7 | env+disk (POST update-envs, POST disks) | 2 | UNVERIFIED | envs ok; disk create: http 400 {"statusCode":400,"error":"Bad Request","message":"\"size\" must be a number"} (size units UNVERIFIED) \| raw: http 400 {"statusCode":400,"error":"Bad Request","message":"\"size\" must be a number"} |
+| 8 | upload+build (POST /v2/projects/liara-pilot-probe/sources) | 2 | PASS | source accepted sourceID=a3ff4536-0fd5-4f64-8b2a-1130d3c85a45.zip \| raw: http 200 {"sourceID":"a3ff4536-0fd5-4f64-8b2a-1130d3c85a45.zip"} |
+| 9 | app_details (GET /v1/projects/liara-pilot-probe) | 1 | PASS | status='ACTIVE' planID='small-g2' platform=None \| raw: http 200 {"project":{"_id":"6ada67d0aa8f2ba374d04af9","project_id":"liara-pilot-probe","type":"static","status":"ACTIVE","readOnlyRootFilesystem":true,"defaultSubdomain":true,"defaultSubdomainExpired":false,"keepDefaultSubdomain":false,"zeroDowntime":false,"scale":1,"envs":[{"key":"PROBE_VAR","value":"liarap |
+| 10 | restart (POST /v1/projects/liara-pilot-probe/actions/restart) | 2 | PASS | restart submitted \| raw: http 200  |
+
+_Tier-3 (delete app/disk) is intentionally absent — the agent never calls it._

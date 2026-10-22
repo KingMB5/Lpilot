@@ -31,7 +31,7 @@ Liara's `port` env convention: the app binds the port declared in `liara.json`
 | `DEPLOYER` | for real runs | `mock` (default) \| `liara_api` \| `liara_cli` |
 | `LIARA_API_TOKEN` | for `liara_api` | the OPERATOR's token; RAM-only per session, never logged |
 | `LIARA_PLAN_ID` | to CREATE new apps | values UNVERIFIED — copy from Liara console |
-| `LIARA_DISK_SIZE` | if disks are created | units UNVERIFIED, default `1G` |
+| `LIARA_DISK_SIZE` | if disks are created | NUMBER of GB (VERIFIED live), default `1` |
 | `LIARA_DRY_RUN` | recommended first run | `1` = validate+print payloads, send nothing |
 | `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` | for real LLM | BoxAPI or any OpenAI-compatible endpoint; empty → FakeLLM |
 

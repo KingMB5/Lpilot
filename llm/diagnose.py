@@ -298,7 +298,7 @@ def deterministic_diagnosis(kind: str, state: dict) -> dict:
                 "params": {"question_fa": f"دستور شروع «{_start_command_of(state)}» کار نمی‌کند؛ دستور درست را بفرست."},
                 "confidence": 0.8}
     if kind == "missing_disk_sqlite":
-        size = os.getenv("LIARA_DISK_SIZE", "1G")
+        size = os.getenv("LIARA_DISK_SIZE", "1")  # VERIFIED live: NUMBER of GB ("1G" -> 400)
         return {"diagnosis_fa": "دیتابیس SQLite به دیسک ماندگار نیاز دارد (الزام مستند لیارا)؛ دیسک می‌سازم و mount می‌کنم.",
                 "action": "add_disk",
                 "params": {"name": "database", "size": size, "mount_to": "db"},
