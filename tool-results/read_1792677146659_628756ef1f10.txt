@@ -1,0 +1,782 @@
+    42→  /* ----------------------------------------------------------
+    43→   * Store (single mutable state object)
+    44→   * ---------------------------------------------------------- */
+    45→
+    46→  var store = {
+    47→    sessionId: null,
+    48→    demo: false,          // demo-mode flag -> amber badge in top bar
+    49→    level: 'beginner',    // 'beginner' | 'expert'
+    50→    screen: 'upload',
+    51→    questions: [],
+    52→    answers: {},          // {qid: value}
+    53→    risks: [],            // [{id, payload, bodyEl}] for level re-render
+    54→    report: null,
+    55→    maxI: -1,             // highest rendered event id (hydration + SSE dedupe)
+    56→    eventsSeen: false,    // snapshot had >= 1 event -> session already started
+    57→    hasPlan: false,
+    58→    planEl: null,         // plan card <li> (replaced, never duplicated)
+    59→    deployGroupEl: null,  // <ol> inside the "استقرار" group
+    60→    monitorTimer: null,   // T6 report-screen poll timer
+    61→    es: null,             // EventSource
+    62→    sseTimer: null,
+    63→    sseAttempts: 0,
+    64→    cancelled: false,
+    65→    hydrating: false,
+    66→    pendingApproval: null
+    67→  };
+    68→
+    69→  /* ----------------------------------------------------------
+    70→   * API layer — every call funnels through req() so session
+    71→   * expiry (404 {detail:"session_expired"}) is handled once.
+    72→   * ---------------------------------------------------------- */
+    73→
+    74→  function req(method, url, body) {
+    75→    var opts = { method: method, headers: {} };
+    76→    if (body instanceof FormData) {
+    77→      opts.body = body; // browser sets multipart boundary itself
+    78→    } else if (body !== undefined) {
+    79→      opts.headers['Content-Type'] = 'application/json';
+    80→      opts.body = JSON.stringify(body);
+    81→    }
+    82→    return fetch(url, opts).then(function (res) {
+    83→      return res.text().then(function (text) {
+    84→        var data = null;
+    85→        if (text) { try { data = JSON.parse(text); } catch (e) { data = null; } }
+    86→        if (!res.ok) {
+    87→          var detail = (data && data.detail != null) ? String(data.detail) : '';
+    88→          if (res.status === 404 && /session_expired|expired|not_found|not found/i.test(detail)) {
+    89→            showExpired();
+    90→            var exp = new Error('session_expired');
+    91→            exp.kind = 'expired'; exp.status = 404; exp.detail = detail;
+    92→            throw exp;
+    93→          }
+    94→          var err = new Error(detail || ('http_' + res.status));
+    95→          err.kind = 'http'; err.status = res.status; err.detail = detail;
+    96→          throw err;
+    97→        }
+    98→        return data;
+    99→      });
+   100→    }, function () {
+   101→      var net = new Error('network_error');
+   102→      net.kind = 'network';
+   103→      throw net;
+   104→    });
+   105→  }
+   106→
+   107→  function isExpired(e) { return !!(e && e.kind === 'expired'); }
+   108→
+   109→  var api = {
+   110→    upload: function (fd) { return req('POST', '/api/upload', fd); },
+   111→    demo: function (body) { return req('POST', '/api/sessions/demo', body); },
+   112→    assessment: function () { return req('GET', '/api/assessment'); },
+   113→    answers: function (id, body) { return req('POST', '/api/sessions/' + encodeURIComponent(id) + '/answers', body); },
+   114→    start: function (id) { return req('POST', '/api/sessions/' + encodeURIComponent(id) + '/start'); },
+   115→    snapshot: function (id) { return req('GET', '/api/sessions/' + encodeURIComponent(id)); },
+   116→    approve: function (id, body) { return req('POST', '/api/sessions/' + encodeURIComponent(id) + '/approve', body); },
+   117→    level: function (id, body) { return req('POST', '/api/sessions/' + encodeURIComponent(id) + '/level', body); },
+   118→    cancel: function (id) { return req('POST', '/api/sessions/' + encodeURIComponent(id) + '/cancel'); },
+   119→    ask: function (id, body) { return req('POST', '/api/sessions/' + encodeURIComponent(id) + '/ask', body); },
+   120→    ops: function (id, body) { return req('POST', '/api/sessions/' + encodeURIComponent(id) + '/ops', body); },
+   121→    monitor: function (id) { return req('GET', '/api/sessions/' + encodeURIComponent(id) + '/monitor'); }
+   122→  };
+   123→
+   124→  /* ----------------------------------------------------------
+   125→   * Screens / top bar
+   126→   * ---------------------------------------------------------- */
+   127→
+   128→  var SCREENS = ['upload', 'assessment', 'run', 'report', 'expired'];
+   129→
+   130→  function showScreen(name) {
+   131→    store.screen = name;
+   132→    SCREENS.forEach(function (s) {
+   133→      var node = $('#screen-' + s);
+   134→      if (node) node.hidden = (s !== name);
+   135→    });
+   136→    if (name === 'run') bindAsk();  // mid-run Q&A input (T15)
+   137→    window.scrollTo(0, 0);
+   138→  }
+   139→
+   140→  function updateDemoBadge() { $('#demo-badge').hidden = (store.demo !== true); }
+   141→
+   142→  function showExpired() {
+   143→    if (store.screen === 'expired') return;
+   144→    stopSSE();
+   145→    closeModal();
+   146→    showScreen('expired');
+   147→  }
+   148→
+   149→  function disableInputs(dis) {
+   150→    $('#btn-cancel').disabled = dis || store.cancelled;
+   151→    $('#lvl-beginner').disabled = dis;
+   152→    $('#lvl-expert').disabled = dis;
+   153→  }
+   154→
+   155→  /* ----------------------------------------------------------
+   156→   * A) Upload screen
+   157→   * ---------------------------------------------------------- */
+   158→
+   159→  var DZ_TITLE = 'فایل zip پروژه را اینجا رها کن';
+   160→  var DZ_TITLE_BUSY = 'در حال آپلود پروژه…';
+   161→
+   162→  function setUploadLoading(on) {
+   163→    var dz = $('#dropzone');
+   164→    dz.classList.toggle('loading', on);
+   165→    $('#dz-spinner').hidden = !on;
+   166→    $('#dz-title').textContent = on ? DZ_TITLE_BUSY : DZ_TITLE;
+   167→    var chips = document.querySelectorAll('.chip');
+   168→    for (var i = 0; i < chips.length; i++) chips[i].disabled = on;
+   169→  }
+   170→
+   171→  function showUploadError(prefix, detail) {
+   172→    var err = $('#upload-error');
+   173→    err.innerHTML = '';
+   174→    err.appendChild(document.createTextNode(prefix));
+   175→    if (detail) err.appendChild(el('span', 'ltr-block', esc(detail)));
+   176→    err.hidden = false;
+   177→  }
+   178→
+   179→  function uploadFile(file) {
+   180→    if (!file) return;
+   181→    $('#upload-error').hidden = true;
+   182→    var isZip = /\.zip$/i.test(file.name) || /zip/i.test(file.type || '');
+   183→    if (!isZip) {
+   184→      showUploadError('فقط فایل zip پذیرفته می‌شود.', null);
+   185→      return;
+   186→    }
+   187→    setUploadLoading(true);
+   188→    var fd = new FormData();
+   189→    fd.append('file', file, file.name);
+   190→    api.upload(fd).then(function (data) {
+   191→      store.sessionId = data.session_id;
+   192→      if (data.demo === true) { store.demo = true; updateDemoBadge(); }
+   193→      return goAssessment();
+   194→    }).catch(function (e) {
+   195→      setUploadLoading(false);
+   196→      if (isExpired(e)) return;
+   197→      showUploadError('آپلود ناموفق بود. دوباره تلاش کن.', e.detail || (e.kind === 'network' ? 'اتصال به سرور برقرار نشد.' : ''));
+   198→    });
+   199→  }
+   200→
+   201→  function demoFixture(key, chipBtn) {
+   202→    $('#upload-error').hidden = true;
+   203→    var chips = document.querySelectorAll('.chip');
+   204→    for (var i = 0; i < chips.length; i++) chips[i].disabled = true;
+   205→    if (chipBtn) chipBtn.classList.add('loading');
+   206→    api.demo({ fixture: key }).then(function (data) {
+   207→      store.sessionId = data.session_id;
+   208→      if (data.demo === true) { store.demo = true; updateDemoBadge(); }
+   209→      return goAssessment();
+   210→    }).catch(function (e) {
+   211→      for (var j = 0; j < chips.length; j++) chips[j].disabled = false;
+   212→      if (chipBtn) chipBtn.classList.remove('loading');
+   213→      if (isExpired(e)) return;
+   214→      showUploadError('ساخت پروژهٔ نمونه ناموفق بود.', e.detail || (e.kind === 'network' ? 'اتصال به سرور برقرار نشد.' : ''));
+   215→    });
+   216→  }
+   217→
+   218→  function wireUpload() {
+   219→    var dz = $('#dropzone');
+   220→    dz.addEventListener('click', function () {
+   221→      if (!dz.classList.contains('loading')) $('#file-input').click();
+   222→    });
+   223→    dz.addEventListener('keydown', function (ev) {
+   224→      if (ev.key === 'Enter' || ev.key === ' ' || ev.key === 'Spacebar') {
+   225→        ev.preventDefault();
+   226→        if (!dz.classList.contains('loading')) $('#file-input').click();
+   227→      }
+   228→    });
+   229→    ['dragenter', 'dragover'].forEach(function (t) {
+   230→      dz.addEventListener(t, function (ev) { ev.preventDefault(); dz.classList.add('drag'); });
+   231→    });
+   232→    ['dragleave', 'drop'].forEach(function (t) {
+   233→      dz.addEventListener(t, function (ev) { ev.preventDefault(); dz.classList.remove('drag'); });
+   234→    });
+   235→    dz.addEventListener('drop', function (ev) {
+   236→      var f = ev.dataTransfer && ev.dataTransfer.files && ev.dataTransfer.files[0];
+   237→      if (f) uploadFile(f);
+   238→    });
+   239→    $('#file-input').addEventListener('change', function (ev) {
+   240→      var f = ev.target.files && ev.target.files[0];
+   241→      if (f) uploadFile(f);
+   242→      ev.target.value = '';
+   243→    });
+   244→    var chips = document.querySelectorAll('.chip');
+   245→    for (var i = 0; i < chips.length; i++) {
+   246→      (function (chip) {
+   247→        chip.addEventListener('click', function () { demoFixture(chip.dataset.fixture, chip); });
+   248→      })(chips[i]);
+   249→    }
+   250→  }
+   251→
+   252→  /* ----------------------------------------------------------
+   253→   * B) Assessment screen
+   254→   * ---------------------------------------------------------- */
+   255→
+   256→  function goAssessment() {
+   257→    showScreen('assessment');
+   258→    var box = $('#questions');
+   259→    var err = $('#assess-error');
+   260→    err.hidden = true;
+   261→    $('#btn-start').disabled = true;
+   262→    $('#btn-expert-skip').disabled = true;
+   263→    box.innerHTML = '';
+   264→    box.appendChild(el('div', 'assess-loading',
+   265→      '<span class="spinner" aria-hidden="true"></span><span>در حال گرفتن سؤال‌ها…</span>'));
+   266→
+   267→    return api.assessment().then(function (data) {
+   268→      store.questions = (data && Array.isArray(data.questions)) ? data.questions : [];
+   269→      store.expertSkip = (data && data.expert_skip) || {};
+   270→      var skipBtn = $('#btn-expert-skip');
+   271→      skipBtn.textContent = store.expertSkip.label || 'رد کردن سؤال‌ها (حالت کارشناس)';
+   272→      skipBtn.disabled = false;
+   273→      box.innerHTML = '';
+   274→      if (!store.questions.length) {
+   275→        box.appendChild(el('p', 'muted', 'سؤالی برای تو ندارم؛ مستقیم شروع می‌کنیم.'));
+   276→      }
+   277→      store.questions.forEach(function (q) { box.appendChild(questionCard(q)); });
+   278→      updateStartState();
+   279→    }).catch(function (e) {
+   280→      if (isExpired(e)) return;
+   281→      box.innerHTML = '';
+   282→      var errBox = $('#assess-error');
+   283→      errBox.innerHTML = '';
+   284→      errBox.appendChild(document.createTextNode('دریافت سؤال‌ها ناموفق بود. '));
+   285→      var retry = el('button', 'btn btn-ghost btn-sm', 'تلاش دوباره');
+   286→      retry.type = 'button';
+   287→      retry.addEventListener('click', function () { goAssessment(); });
+   288→      errBox.appendChild(retry);
+   289→      errBox.hidden = false;
+   290→    });
+   291→  }
+   292→
+   293→  function questionCard(q) {
+   294→    var card = el('div', 'card q-card');
+   295→    card.setAttribute('role', 'radiogroup');
+   296→    card.setAttribute('aria-label', q.text || 'سؤال');
+   297→    card.appendChild(el('p', 'q-text', esc(q.text || '')));
+   298→    var opts = el('div', 'q-options');
+   299→    (q.options || []).forEach(function (o) {
+   300→      var b = el('button', 'opt-btn');
+   301→      b.type = 'button';
+   302→      b.setAttribute('role', 'radio');
+   303→      b.setAttribute('aria-checked', 'false');
+   304→      b.dataset.value = (o.value != null) ? String(o.value) : '';
+   305→      b.textContent = (o.label != null) ? String(o.label) : b.dataset.value;
+   306→      b.addEventListener('click', function () {
+   307→        var siblings = opts.querySelectorAll('.opt-btn');
+   308→        for (var i = 0; i < siblings.length; i++) siblings[i].setAttribute('aria-checked', 'false');
+   309→        b.setAttribute('aria-checked', 'true');
+   310→        store.answers[q.id] = b.dataset.value; // exactly one option per question
+   311→        updateStartState();
+   312→      });
+   313→      opts.appendChild(b);
+   314→    });
+   315→    card.appendChild(opts);
+   316→    return card;
+   317→  }
+   318→
+   319→  function updateStartState() {
+   320→    var qs = store.questions;
+   321→    var all = qs.length === 0 || qs.every(function (q) { return store.answers[q.id] !== undefined; });
+   322→    $('#btn-start').disabled = !all;
+   323→    $('#assess-hint').textContent = all
+   324→      ? 'هر لحظه آماده‌ام — دکمهٔ «شروع بررسی» را بزن.'
+   325→      : 'برای شروع، به همهٔ سؤال‌ها پاسخ بده.';
+   326→  }
+   327→
+   328→  function submitAnswers(skipExpert) {
+   329→    var btn = skipExpert ? $('#btn-expert-skip') : $('#btn-start');
+   330→    btn.disabled = true;
+   331→    var payload = skipExpert
+   332→      ? { answers: {}, skip_expert: true }
+   333→      : { answers: shallowCopy(store.answers), skip_expert: false };
+   334→    api.answers(store.sessionId, payload).then(function (res) {
+   335→      if (res && (res.level === 'beginner' || res.level === 'expert')) store.level = res.level;
+   336→      return enterRun();
+   337→    }).catch(function (e) {
+   338→      if (isExpired(e)) return;
+   339→      btn.disabled = false;
+   340→      var errBox = $('#assess-error');
+   341→      errBox.innerHTML = '';
+   342→      errBox.appendChild(document.createTextNode('ثبت پاسخ‌ها ناموفق بود. دوباره تلاش کن.'));
+   343→      if (e.detail) errBox.appendChild(el('span', 'ltr-block', esc(e.detail)));
+   344→      errBox.hidden = false;
+   345→    });
+   346→  }
+   347→
+   348→  function shallowCopy(obj) {
+   349→    var out = {};
+   350→    for (var k in obj) { if (Object.prototype.hasOwnProperty.call(obj, k)) out[k] = obj[k]; }
+   351→    return out;
+   352→  }
+   353→
+   354→  /* ----------------------------------------------------------
+   355→   * C) Run screen — entry, hydration, SSE
+   356→   * ---------------------------------------------------------- */
+   357→
+   358→  function enterRun() {
+   359→    showScreen('run');
+   360→    setLevelUI();
+   361→    disableInputs(false);
+   362→    $('#stage-title').textContent = 'در حال آماده‌سازی…';
+   363→
+   364→    return hydrate().then(function (snap) {
+   365→      if (store.screen !== 'run') return; // redirected (expired / report)
+   366→      var st = snap ? String(snap.status || '').toLowerCase() : '';
+   367→
+   368→      // Session already finished before we got here.
+   369→      if (store.report && /done|success|finish|complete/.test(st)) { goReport(); return; }
+   370→      if (/cancel/.test(st)) {
+   371→        store.cancelled = true;
+   372→        addNote('لغو شد');
+   373→        disableInputs(true);
+   374→        return;
+   375→      }
+   376→
+   377→      openSSE();
+   378→
+   379→      // Only start the agent for a fresh session (no prior events, no
+   380→      // running/approval status in the snapshot).
+   381→      var resumed = store.eventsSeen || /run|deploy|assess|inspect|plan|approv|start/.test(st);
+   382→      if (!resumed) {
+   383→        api.start(store.sessionId).catch(function (e) {
+   384→          if (isExpired(e)) return;
+   385→          if (e.status === 409 || /already/i.test(String(e.detail || ''))) return; // already started
+   386→          rError({ message: e.detail || ('start failed: ' + (e.status || 'network')) });
+   387→        });
+   388→      }
+   389→    });
+   390→  }
+   391→
+   392→  /** GET snapshot once, replay stored events oldest-first. */
+   393→  function hydrate() {
+   394→    store.hydrating = true;
+   395→    return api.snapshot(store.sessionId).then(function (snap) {
+   396→      snap = snap || {};
+   397→      if (snap.demo === true) { store.demo = true; updateDemoBadge(); }
+   398→      if (snap.level === 'beginner' || snap.level === 'expert') {
+   399→        store.level = snap.level;
+   400→        setLevelUI();
+   401→      }
+   402→      var evs = Array.isArray(snap.events) ? snap.events.slice() : [];
+   403→      evs.sort(function (a, b) { return (a && a.i ? a.i : 0) - (b && b.i ? b.i : 0); });
+   404→      store.eventsSeen = evs.length > 0;
+   405→
+   406→      var approvalPayload = null;
+   407→      var seenApproval = false;
+   408→      var afterApproval = false;
+   409→
+   410→      evs.forEach(function (ev) {
+   411→        if (!ev || !ev.type) return;
+   412→        if (ev.type === 'approval_required') {
+   413→          approvalPayload = ev.payload || {};
+   414→          seenApproval = true;
+   415→          afterApproval = false;
+   416→        } else if (seenApproval) {
+   417→          afterApproval = true;
+   418→        }
+   419→        handleEvent(ev.i, ev.type, ev.payload || {});
+   420→      });
+   421→
+   422→      // Fallbacks for data the snapshot exposes outside the event list.
+   423→      if (snap.plan && !store.hasPlan) handleEvent(null, 'plan', snap.plan);
+   424→      if (snap.report) store.report = snap.report;
+   425→
+   426→      // Pending approval: snapshot field wins (note not yet shown for it);
+   427→      // otherwise an approval_required that is still the newest event means
+   428→      // the user has not decided yet (its note was already added by the
+   429→      // event route during replay above — do not duplicate it).
+   430→      var st = String(snap.status || '').toLowerCase();
+   431→      if (snap.approval) {
+   432→        addNote('خلبان برای ادامه نیاز به تأیید تو دارد.');
+   433→        openApprovalModal(snap.approval);
+   434→      } else if (approvalPayload && !afterApproval && !store.cancelled && !/done|cancel|success/.test(st)) {
+   435→        openApprovalModal(approvalPayload);
+   436→      }
+   437→
+   438→      store.hydrating = false;
+   439→      scrollTimeline();
+   440→      return snap;
+   441→    }).catch(function (e) {
+   442→      store.hydrating = false;
+   443→      if (isExpired(e)) return null;
+   444→      // Non-fatal: SSE replay (no Last-Event-ID yet -> full replay) covers us.
+   445→      addNote('دریافت وضعیت قبلی ناموفق بود؛ ادامه می‌دهیم.');
+   446→      return null;
+   447→    });
+   448→  }
+   449→
+   450→  /**
+   451→   * SSE with manual reconnect: close on error, wait 2s, reopen the SAME
+   452→   * URL (never add cache-busters — that would defeat Last-Event-ID replay
+   453→   * semantics server-side). A freshly reopened EventSource has no
+   454→   * Last-Event-ID, so the server may replay old messages; handleEvent()
+   455→   * drops anything with id <= store.maxI, so nothing renders twice.
+   456→   */
+   457→  function openSSE() {
+   458→    stopSSE();
+   459→    if (!store.sessionId || store.screen === 'report' || store.screen === 'expired') return;
+   460→    var es = new EventSource('/api/events/' + encodeURIComponent(store.sessionId));
+   461→    store.es = es;
+   462→    store.sseAttempts = 0;
+   463→
+   464→    es.onopen = function () { store.sseAttempts = 0; };
+   465→
+   466→    es.onmessage = function (ev) {
+   467→      var msg = null;
+   468→      try { msg = JSON.parse(ev.data); } catch (e) { return; }
+   469→      if (!msg || typeof msg !== 'object' || !msg.type) return;
+   470→      var payload = shallowCopy(msg);
+   471→      delete payload.type;
+   472→      handleEvent(ev.lastEventId, msg.type, payload);
+   473→    };
+   474→
+   475→    es.onerror = function () {
+   476→      // Native reconnect retries forever; we take over to cap attempts.
+   477→      try { es.close(); } catch (e) { /* noop */ }
+   478→      if (store.es === es) store.es = null;
+   479→      store.sseAttempts += 1;
+   480→      if (store.sseAttempts >= 10) { showExpired(); return; }
+   481→      store.sseTimer = setTimeout(openSSE, 2000);
+   482→    };
+   483→  }
+   484→
+   485→  function stopSSE() {
+   486→    if (store.sseTimer) { clearTimeout(store.sseTimer); store.sseTimer = null; }
+   487→    if (store.es) {
+   488→      try { store.es.close(); } catch (e) { /* noop */ }
+   489→      store.es = null;
+   490→    }
+   491→  }
+   492→
+   493→  /** Central event gate: dedupes by integer id, then routes by type. */
+   494→  function handleEvent(rawId, type, payload) {
+   495→    if (rawId !== undefined && rawId !== null && String(rawId) !== '') {
+   496→      var n = Number(rawId);
+   497→      if (Number.isFinite(n)) {
+   498→        if (n <= store.maxI) return; // already rendered (hydration / replay)
+   499→        store.maxI = n;
+   500→      }
+   501→    }
+   502→    var fn = ROUTES[type];
+   503→    if (fn) fn(payload || {});
+   504→  }
+   505→
+   506→  /* ----------------------------------------------------------
+   507→   * Timeline building blocks
+   508→   * ---------------------------------------------------------- */
+   509→
+   510→  function timelineEl() { return $('#timeline'); }
+   511→
+   512→  function tlItem(cls, dotCls) {
+   513→    var li = el('li', 'tl-entry ' + (cls || ''));
+   514→    li.appendChild(el('span', 'tl-dot ' + (dotCls || '')));
+   515→    return li;
+   516→  }
+   517→
+   518→  function scrollTimeline() {
+   519→    if (store.hydrating) return; // batch scroll once after hydration
+   520→    var tl = timelineEl();
+   521→    var last = tl.lastElementChild;
+   522→    if (last && typeof last.scrollIntoView === 'function') {
+   523→      try { last.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
+   524→      catch (e) { last.scrollIntoView(); }
+   525→    }
+   526→  }
+   527→
+   528→  function addNote(text) {
+   529→    var li = tlItem('tl-note', '');
+   530→    li.appendChild(el('span', 'note-text', esc(text)));
+   531→    timelineEl().appendChild(li);
+   532→    scrollTimeline();
+   533→  }
+   534→
+   535→  function ensureDeployGroup() {
+   536→    if (store.deployGroupEl && store.deployGroupEl.isConnected) return store.deployGroupEl;
+   537→    var li = el('li', 'tl-entry tl-group');
+   538→    li.appendChild(el('span', 'tl-dot dot-amber'));
+   539→    var box = el('div', 'group-box');
+   540→    box.appendChild(el('div', 'group-title', 'استقرار'));
+   541→    var list = el('ol', 'group-list');
+   542→    box.appendChild(list);
+   543→    li.appendChild(box);
+   544→    timelineEl().appendChild(li);
+   545→    store.deployGroupEl = list;
+   546→    return list;
+   547→  }
+   548→
+   549→  /* ----------------------------------------------------------
+   550→   * SSE event route handlers (one per server event type)
+   551→   * ---------------------------------------------------------- */
+   552→
+   553→  function rStage(p) {
+   554→    if (p.fa) $('#stage-title').textContent = p.fa;
+   555→    var li = tlItem('tl-stage', 'dot-amber');
+   556→    var box = el('div', 'stage-box');
+   557→    box.appendChild(el('span', 'stage-fa', esc(p.fa || p.name || '')));
+   558→    if (p.name) box.appendChild(el('span', 'stage-name ltr-block', esc(p.name)));
+   559→    li.appendChild(box);
+   560→    timelineEl().appendChild(li);
+   561→    scrollTimeline();
+   562→  }
+   563→
+   564→  function rLog(p) {
+   565→    var li = tlItem('tl-log', '');
+   566→    var line = el('div', 'log-line ltr-block');
+   567→    line.textContent = (p.text != null) ? String(p.text) : '';
+   568→    li.appendChild(line);
+   569→    timelineEl().appendChild(li);
+   570→    scrollTimeline();
+   571→  }
+   572→
+   573→  function rDeployLog(p) {
+   574→    var list = ensureDeployGroup();
+   575→    var row = el('li', 'log-line deploy-line ltr-block');
+   576→    row.textContent = (p.text != null) ? String(p.text) : '';
+   577→    list.appendChild(row);
+   578→    scrollTimeline();
+   579→  }
+   580→
+   581→  var SEV = {
+   582→    high:   { label: 'بالا',   badgeCls: 'badge-red',   dotCls: 'dot-red' },
+   583→    medium: { label: 'متوسط', badgeCls: 'badge-amber', dotCls: 'dot-amber' },
+   584→    low:    { label: 'کم',    badgeCls: 'badge-zinc',  dotCls: '' }
+   585→  };
+   586→
+   587→  function riskBodyText(p) {
+   588→    return (store.level === 'expert')
+   589→      ? (p.expert_text || p.detail || '')
+   590→      : (p.beginner_text || p.detail || '');
+   591→  }
+   592→
+   593→  function rRisk(p) {
+   594→    var sev = SEV[p.severity] || SEV.low;
+   595→    var riskId = (p.id != null) ? String(p.id) : null;
+   596→
+   597→    // Upsert: same risk id twice -> refresh body only.
+   598→    for (var i = 0; i < store.risks.length; i++) {
+   599→      if (riskId !== null && store.risks[i].id === riskId) {
+   600→        store.risks[i].payload = p;
+   601→        if (store.risks[i].bodyEl && store.risks[i].bodyEl.isConnected) {
+   602→          store.risks[i].bodyEl.textContent = riskBodyText(p);
+   603→        }
+   604→        return;
+   605→      }
+   606→    }
+   607→
+   608→    var li = tlItem('tl-card', sev.dotCls);
+   609→    if (riskId) li.dataset.riskId = riskId;
+   610→    var card = el('div', 'card risk-card');
+   611→
+   612→    var head = el('div', 'risk-head');
+   613→    head.appendChild(el('span', 'badge ' + sev.badgeCls, sev.label));
+   614→    if (p.evidence_file) head.appendChild(el('span', 'evidence ltr-block', esc(p.evidence_file)));
+   615→    card.appendChild(head);
+   616→
+   617→    var body = el('p', 'risk-body');
+   618→    body.setAttribute('data-risk-body', '');
+   619→    body.textContent = riskBodyText(p);
+   620→    card.appendChild(body);
+   621→
+   622→    if (Array.isArray(p.concept_keys) && p.concept_keys.length) {
+   623→      var keys = el('div', 'chip-wrap risk-keys');
+   624→      p.concept_keys.forEach(function (k) {
+   625→        keys.appendChild(el('span', 'key-chip ltr-block', esc(k)));
+   626→      });
+   627→      card.appendChild(keys);
+   628→    }
+   629→
+   630→    li.appendChild(card);
+   631→    timelineEl().appendChild(li);
+   632→    store.risks.push({ id: riskId, payload: p, bodyEl: body });
+   633→    scrollTimeline();
+   634→  }
+   635→
+   636→  /** Re-render risk bodies after a level change (beginner <-> expert). */
+   637→  function renderRiskBodies() {
+   638→    store.risks.forEach(function (r) {
+   639→      if (r.bodyEl && r.bodyEl.isConnected) r.bodyEl.textContent = riskBodyText(r.payload);
+   640→    });
+   641→  }
+   642→
+   643→  function rPlan(p) {
+   644→    store.hasPlan = true;
+   645→    if (store.planEl && store.planEl.isConnected) store.planEl.remove(); // replace, never duplicate
+   646→
+   647→    var li = tlItem('tl-card', 'dot-amber');
+   648→    var card = el('div', 'card plan-card');
+   649→    card.appendChild(el('div', 'plan-title', 'برنامهٔ استقرار'));
+   650→
+   651→    var meta = el('div', 'plan-meta');
+   652→    if (p.platform) {
+   653→      meta.appendChild(el('span', 'meta-item', 'پلتفرم: '));
+   654→      meta.appendChild(el('span', 'meta-val ltr-block', esc(p.platform)));
+   655→    }
+   656→    if (p.port != null && p.port !== '') {
+   657→      meta.appendChild(el('span', 'meta-item', 'پورت: '));
+   658→      meta.appendChild(el('span', 'meta-val ltr-block', esc(p.port)));
+   659→    }
+   660→    if (meta.childElementCount) card.appendChild(meta);
+   661→
+   662→    if (Array.isArray(p.steps) && p.steps.length) {
+   663→      var ol = el('ol', 'plan-steps');
+   664→      p.steps.forEach(function (s, i) {
+   665→        var item = el('li', 'plan-step');
+   666→        item.appendChild(el('span', 'step-num', faDigits(i + 1)));
+   667→        var body = el('div', 'plan-step-body');
+   668→        var title = (s && (s.title_fa || s.title)) || ('مرحلهٔ ' + faDigits(i + 1));
+   669→        body.appendChild(el('span', 'plan-step-title', esc(title)));
+   670→        if (s && s.detail) body.appendChild(el('span', 'plan-step-detail', esc(s.detail)));
+   671→        item.appendChild(body);
+   672→        ol.appendChild(item);
+   673→      });
+   674→      card.appendChild(ol);
+   675→    }
+   676→
+   677→    var costRow = el('div', 'cost-row');
+   678→    costRow.appendChild(el('span', 'cost-label', 'هزینهٔ تخمینی:'));
+   679→    costRow.appendChild(el('span', 'cost-val ltr-block', esc(p.estimated_cost != null ? p.estimated_cost : '—')));
+   680→    if (p.cost_unverified) costRow.appendChild(el('span', 'badge badge-amber', UNVERIFIED_BADGE));
+   681→    card.appendChild(costRow);
+   682→
+   683→    var envItems = normalizeEnv(p.env_needed);
+   684→    if (envItems.length) {
+   685→      var envWrap = el('div', 'chip-wrap');
+   686→      envWrap.appendChild(el('span', 'sec-inline-label', 'متغیرهای محیطی موردنیاز:'));
+   687→      envItems.forEach(function (it) {
+   688→        envWrap.appendChild(el('span', 'key-chip ltr-block', esc(it.key)));
+   689→      });
+   690→      card.appendChild(envWrap);
+   691→    }
+   692→
+   693→    if (Array.isArray(p.prepared_files) && p.prepared_files.length) {
+   694→      card.appendChild(el('span', 'sec-inline-label', 'فایل‌های آماده‌شده:'));
+   695→      card.appendChild(preparedFilesBlock(p.prepared_files));
+   696→    }
+   697→
+   698→    li.appendChild(card);
+   699→    timelineEl().appendChild(li);
+   700→    store.planEl = li;
+   701→    scrollTimeline();
+   702→  }
+   703→
+   704→  function rApproval(p) {
+   705→    addNote('خلبان برای ادامه نیاز به تأیید تو دارد.');
+   706→    openApprovalModal(p);
+   707→  }
+   708→
+   709→  function rFix(p) {
+   710→    var li = tlItem('tl-card', 'dot-amber');
+   711→    var card = el('div', 'card fix-card');
+   712→    var attempt = (p.attempt != null) ? faDigits(p.attempt) : '؟';
+   713→    var maxA = (p.max_attempts != null) ? faDigits(p.max_attempts) : '؟';
+   714→    card.appendChild(el('div', 'fix-title', 'تلاش خودکار ' + attempt + ' از ' + maxA));
+   715→    if (p.reason_fa) card.appendChild(el('p', 'fix-reason', esc(p.reason_fa)));
+   716→    if (p.action) {
+   717→      var act = el('div', 'fix-action ltr-block');
+   718→      act.textContent = String(p.action);
+   719→      card.appendChild(act);
+   720→    }
+   721→    // Risk tier badge (T4): every action shows its tier + context note.
+   722→    if (p.risk_tier && p.risk_tier.tier) card.appendChild(tierBadge(p.risk_tier));
+   723→    if (p.risk_note_fa) card.appendChild(el('span', 'risk-note muted small', esc(p.risk_note_fa)));
+   724→    // Ranked causes for unscripted failures (T3): quote-only evidence.
+   725→    if (Array.isArray(p.causes_ranked) && p.causes_ranked.length) {
+   726→      var cwrap = el('ul', 'causes-list');
+   727→      p.causes_ranked.forEach(function (c, i) {
+   728→        var item = el('li', 'cause-item');
+   729→        item.appendChild(el('span', 'cause-rank', faDigits(i + 1)));
+   730→        item.appendChild(el('span', 'cause-text', esc((c && c.cause_fa) || '')));
+   731→        if (c && c.evidence) item.appendChild(el('span', 'cause-evidence ltr-block', esc(c.evidence)));
+   732→        cwrap.appendChild(item);
+   733→      });
+   734→      card.appendChild(cwrap);
+   735→    }
+   736→    li.appendChild(card);
+   737→    timelineEl().appendChild(li);
+   738→    scrollTimeline();
+   739→  }
+   740→
+   741→  var TIER_BADGE_CLS = { auto: 'badge-zinc', approval: 'badge-amber', forbidden: 'badge-red' };
+   742→
+   743→  function tierBadge(rt) {
+   744→    var cls = TIER_BADGE_CLS[rt.tier] || 'badge-zinc';
+   745→    var fa = rt.tier_fa || rt.tier || '';
+   746→    var b = el('span', 'badge ' + cls + ' tier-badge', esc(fa));
+   747→    // append the numeric level only when the label does not already say it
+   748→    if (rt.tier_level && fa.indexOf('سطح') === -1) {
+   749→      b.appendChild(el('span', 'tier-level', 'سطح ' + faDigits(rt.tier_level)));
+   750→    }
+   751→    return b;
+   752→  }
+   753→
+   754→  function rOps(p) {
+   755→    var ok = !!p.ok;
+   756→    var li = tlItem('tl-card', ok ? 'dot-emerald' : 'dot-red');
+   757→    var card = el('div', 'card ops-card');
+   758→    var head = el('div', 'risk-head');
+   759→    head.appendChild(el('span', 'ops-title', 'عملیات: ' + esc(p.action || '')));
+   760→    if (p.risk_tier && p.risk_tier.tier) head.appendChild(tierBadge(p.risk_tier));
+   761→    card.appendChild(head);
+   762→    card.appendChild(el('span', 'badge ' + (ok ? 'badge-emerald' : 'badge-red'), ok ? 'انجام شد' : 'ناموفق'));
+   763→    if (p.message_fa) card.appendChild(el('span', 'ops-msg ltr-block', esc(p.message_fa)));
+   764→    li.appendChild(card);
+   765→    timelineEl().appendChild(li);
+   766→    scrollTimeline();
+   767→  }
+   768→
+   769→  function rOpsDenied(p) {
+   770→    var li = tlItem('tl-card', 'dot-red');
+   771→    var card = el('div', 'card ops-card ops-denied');
+   772→    var head = el('div', 'risk-head');
+   773→    head.appendChild(el('span', 'ops-title', 'اقدام رد شد: ' + esc(p.action || '')));
+   774→    if (p.risk_tier && p.risk_tier.tier) head.appendChild(tierBadge(p.risk_tier));
+   775→    card.appendChild(head);
+   776→    card.appendChild(el('p', 'fix-reason', esc(p.reason_fa || 'این اقدام بدون تأیید اجرا نمی‌شود.')));
+   777→    li.appendChild(card);
+   778→    timelineEl().appendChild(li);
+   779→    scrollTimeline();
+   780→  }
+   781→
+   782→  function rMonitorAlert(p) {
+   783→    var li = tlItem('tl-card', 'dot-red');
+   784→    var card = el('div', 'card monitor-alert-card');
+   785→    card.appendChild(el('div', 'fix-title', 'هشدار پایش'));
+   786→    if (p.message_fa) card.appendChild(el('p', 'fix-reason', esc(p.message_fa)));
+   787→    if (p.label) card.appendChild(el('span', 'badge badge-amber', esc(p.label)));
+   788→    var sug = p.suggested_action;
+   789→    if (sug && sug.tier) {
+   790→      var row = el('div', 'monitor-row');
+   791→      row.appendChild(el('span', 'muted small', 'اقدام پیشنهادی:'));
+   792→      row.appendChild(el('span', 'ops-title', esc(sug.action)));
+   793→      row.appendChild(tierBadge(sug));
+   794→      card.appendChild(row);
+   795→      card.appendChild(el('p', 'muted small', 'اجرای آن فقط با تأیید تو انجام می‌شود (ماتریس ریسک سطح ۲).'));
+   796→    }
+   797→    li.appendChild(card);
+   798→    timelineEl().appendChild(li);
+   799→    scrollTimeline();
+   800→  }
+   801→
+   802→  function rVerify(p) {
+   803→    var ok = !!p.ok;
+   804→    var li = tlItem('tl-card', ok ? 'dot-emerald' : 'dot-red');
+   805→    var card = el('div', 'card verify-card ' + (ok ? 'verify-ok' : 'verify-fail'));
+   806→    card.appendChild(el('div', 'verify-title', ok ? 'بررسی نهایی موفق' : 'بررسی نهایی ناموفق'));
+   807→    if (p.status != null && p.status !== '') {
+   808→      card.appendChild(el('span', 'badge ' + (ok ? 'badge-emerald' : 'badge-red'), 'HTTP ' + p.status));
+   809→    }
+   810→    if (p.url) {
+   811→      var a = el('a', 'live-link ltr-block');
+   812→      a.href = p.url;
+   813→      a.target = '_blank';
+   814→      a.rel = 'noopener';
+   815→      a.textContent = p.url;
+   816→      card.appendChild(a);
+   817→    }
+   818→    li.appendChild(card);
+   819→    timelineEl().appendChild(li);
+   820→    scrollTimeline();
+   821→  }
+
+[showing lines 42-821 of 1545; use offset=822 with limit to continue reading]

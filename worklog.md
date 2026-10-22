@@ -431,3 +431,20 @@ Stage Summary:
 - Not changed (known risks, out of scope): UNVERIFIED source badge text is long on 375px
   (wraps, no overflow); monitor poll interval fixed 15s; modal password fields are plain text
   inputs (no visibility toggle) — all pre-existing behaviors, intentionally untouched.
+
+---
+Task ID: 4-b (real-LLM wiring + docs verification + delivery rebuild)
+Agent: Z.ai Code (main)
+Task: Mehran's Phase-4 ask — premium UI (done by 4-a), real BoxAPI LLM, Liara docs verification, new delivery zip.
+
+Work Log:
+- BoxAPI docs page is login-walled; used the operator-provided sample (OpenAI SDK, base_url https://ai.boxapi.ir/ai/v1, model gpt-6-astra) as the verified source. llm/client.py already matched the pattern exactly (OpenAI(base_url, api_key) + chat.completions.create) — only defaults changed.
+- DEFAULT_LLM_MODEL gpt-5.4-mini -> gpt-6-astra in llm/client.py + .env.example; updated the two assertions in tests/test_real_llm.py.
+- Verified https://docs.liara.ir/references/cli/about/ — CLI documented surface (apps, deploy, logs, env vars, disks, restart, domains) matches LiaraApiDeployer's op families; recorded as VERIFIED fact (source URL + 2026-10-22) in config/defaults.yaml alongside boxapi_llm_endpoint fact (initially appended into unverified_facts by mistake, surgically moved).
+- Independently re-verified 4-a: fresh uvicorn on :3010, agent-browser E2E (chip click -> questions screen), zero console/page errors, screenshots reviewed; audited the 100-line app.js diff — 6 presentational helpers + one real fix (question-modal race during self-fix resume).
+- Suite: 134 passed. Committed d31b767. Rebuilt zip (129 entries), uploaded https://x0.at/OGiG.zip, md5 match.
+
+Stage Summary:
+- UI: premium dark Mission-Control theme live in web/ (no build step, no external resources, offline-safe).
+- Real LLM: zero-config with a BoxAPI key — cp .env.example .env, fill LLM_API_KEY, DEMO_MODE=0.
+- Delivery: https://x0.at/OGiG.zip (v0.1.0, 4 launchers + all Phase-4 changes).

@@ -1,0 +1,872 @@
+     1→/* ============================================================
+     2→   LiaraPilot — Persian RTL dark-premium UI
+     3→   Plain CSS. No frameworks, no webfonts, fully offline.
+     4→   Palette: warm near-black bg + amber primary + emerald success.
+     5→   Deliberately NO blue / indigo anywhere.
+     6→   ============================================================ */
+     7→
+     8→:root {
+     9→  --bg: #0d0f13;
+    10→  --bg-raise: #11141a;
+    11→  --surface: #151922;
+    12→  --surface-2: #1b1f28;
+    13→  --deep: #0b0d11;           /* code/log wells */
+    14→  --border: #262b35;
+    15→  --border-soft: #1f242d;
+    16→
+    17→  --text: #e8eaf0;
+    18→  --text-muted: #9aa3b2;
+    19→  --text-faint: #6f7889;
+    20→
+    21→  --amber: #f59e0b;
+    22→  --amber-bright: #fbbf24;
+    23→  --amber-dim: rgba(245, 158, 11, 0.13);
+    24→  --amber-border: rgba(245, 158, 11, 0.38);
+    25→
+    26→  --emerald: #10b981;
+    27→  --emerald-bright: #34d399;
+    28→  --emerald-dim: rgba(16, 185, 129, 0.12);
+    29→  --emerald-border: rgba(16, 185, 129, 0.42);
+    30→
+    31→  --red: #ef4444;
+    32→  --red-bright: #f87171;
+    33→  --red-soft: #fca5a5;
+    34→  --red-dim: rgba(239, 68, 68, 0.12);
+    35→  --red-border: rgba(239, 68, 68, 0.4);
+    36→
+    37→  --zinc: #a1a1aa;
+    38→  --zinc-dim: rgba(161, 161, 170, 0.12);
+    39→  --zinc-border: rgba(161, 161, 170, 0.35);
+    40→
+    41→  --radius-sm: 10px;
+    42→  --radius: 14px;
+    43→  --radius-lg: 20px;
+    44→  --shadow-soft: 0 8px 24px rgba(0, 0, 0, 0.28);
+    45→  --shadow-pop: 0 24px 64px rgba(0, 0, 0, 0.5);
+    46→
+    47→  --font: Vazirmatn, "IRANSans", "Segoe UI", Tahoma, sans-serif;
+    48→  --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+    49→}
+    50→
+    51→/* ---------- base ---------- */
+    52→
+    53→* { box-sizing: border-box; }
+    54→
+    55→html { -webkit-text-size-adjust: 100%; }
+    56→
+    57→body {
+    58→  margin: 0;
+    59→  min-height: 100vh;
+    60→  display: flex;
+    61→  flex-direction: column;
+    62→  font-family: var(--font);
+    63→  font-size: 15.5px;
+    64→  line-height: 1.75;
+    65→  color: var(--text);
+    66→  background:
+    67→    radial-gradient(1100px 520px at 88% -8%, rgba(245, 158, 11, 0.06), transparent 60%),
+    68→    radial-gradient(900px 480px at -10% 110%, rgba(16, 185, 129, 0.045), transparent 55%),
+    69→    var(--bg);
+    70→  background-attachment: fixed;
+    71→}
+    72→
+    73→::selection { background: rgba(245, 158, 11, 0.32); color: #ffffff; }
+    74→
+    75→:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; border-radius: 6px; }
+    76→
+    77→::-webkit-scrollbar { width: 10px; height: 10px; }
+    78→::-webkit-scrollbar-track { background: transparent; }
+    79→::-webkit-scrollbar-thumb { background: #2b2e35; border-radius: 8px; border: 2px solid var(--bg); }
+    80→
+    81→/* RTL-safe blocks: every log line, command, URL, path, env key. */
+    82→.ltr-block {
+    83→  direction: ltr;
+    84→  text-align: left;
+    85→  unicode-bidi: isolate;
+    86→  font-family: var(--mono);
+    87→  overflow-wrap: anywhere;
+    88→  word-break: break-word;
+    89→}
+    90→
+    91→.muted { color: var(--text-muted); }
+    92→.small { font-size: 0.85rem; }
+    93→
+    94→/* ---------- top bar ---------- */
+    95→
+    96→.topbar {
+    97→  position: sticky;
+    98→  top: 0;
+    99→  z-index: 30;
+   100→  display: flex;
+   101→  align-items: center;
+   102→  justify-content: space-between;
+   103→  gap: 0.8rem;
+   104→  padding: 0.8rem 1.2rem;
+   105→  background: rgba(13, 15, 19, 0.84);
+   106→  backdrop-filter: blur(10px);
+   107→  -webkit-backdrop-filter: blur(10px);
+   108→  border-bottom: 1px solid var(--border-soft);
+   109→}
+   110→
+   111→.brand { display: flex; align-items: center; gap: 0.6rem; min-width: 0; }
+   112→.brand-mark { color: var(--amber); display: flex; flex: none; }
+   113→.brand-name { font-weight: 800; letter-spacing: 0.2px; white-space: nowrap; }
+   114→.brand-sub {
+   115→  color: var(--text-muted);
+   116→  font-size: 0.9rem;
+   117→  border-inline-start: 1px solid var(--border);
+   118→  padding-inline-start: 0.65rem;
+   119→  white-space: nowrap;
+   120→}
+   121→
+   122→/* ---------- badges ---------- */
+   123→
+   124→.badge {
+   125→  display: inline-flex;
+   126→  align-items: center;
+   127→  gap: 0.35rem;
+   128→  padding: 0.14rem 0.65rem;
+   129→  border-radius: 999px;
+   130→  font-size: 0.78rem;
+   131→  font-weight: 700;
+   132→  line-height: 1.7;
+   133→}
+   134→.badge-amber   { background: var(--amber-dim);   color: var(--amber-bright);   border: 1px solid var(--amber-border); }
+   135→.badge-emerald { background: var(--emerald-dim); color: var(--emerald-bright); border: 1px solid var(--emerald-border); }
+   136→.badge-red     { background: var(--red-dim);     color: var(--red-bright);     border: 1px solid var(--red-border); }
+   137→.badge-zinc    { background: var(--zinc-dim);    color: var(--zinc);           border: 1px solid var(--zinc-border); }
+   138→
+   139→/* ---------- layout ---------- */
+   140→
+   141→.wrap {
+   142→  width: 100%;
+   143→  max-width: 880px;
+   144→  margin: 0 auto;
+   145→  padding: 0 1rem 3.5rem;
+   146→  flex: 1;
+   147→}
+   148→
+   149→.screen { animation: fade-in 0.25s ease both; }
+   150→.screen[hidden] { display: none !important; }
+   151→
+   152→@keyframes fade-in {
+   153→  from { opacity: 0; transform: translateY(6px); }
+   154→  to   { opacity: 1; transform: none; }
+   155→}
+   156→
+   157→.foot {
+   158→  text-align: center;
+   159→  font-size: 0.8rem;
+   160→  padding: 1rem;
+   161→  border-top: 1px solid var(--border-soft);
+   162→}
+   163→
+   164→.noscript { text-align: center; color: var(--amber-bright); padding: 1rem; }
+   165→
+   166→/* ---------- buttons ---------- */
+   167→
+   168→.btn {
+   169→  display: inline-flex;
+   170→  align-items: center;
+   171→  justify-content: center;
+   172→  gap: 0.5rem;
+   173→  padding: 0.6rem 1.25rem;
+   174→  border-radius: 12px;
+   175→  border: 1px solid transparent;
+   176→  font: inherit;
+   177→  font-weight: 700;
+   178→  font-size: 0.95rem;
+   179→  cursor: pointer;
+   180→  transition: background-color 0.18s ease, border-color 0.18s ease, color 0.18s ease,
+   181→              transform 0.18s ease, box-shadow 0.18s ease;
+   182→}
+   183→.btn:active:not(:disabled) { transform: translateY(1px) scale(0.99); }
+   184→.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+   185→
+   186→.btn-primary { background: var(--amber); color: #221602; }
+   187→.btn-primary:hover:not(:disabled) {
+   188→  background: var(--amber-bright);
+   189→  box-shadow: 0 6px 20px rgba(245, 158, 11, 0.25);
+   190→  transform: translateY(-1px);
+   191→}
+   192→
+   193→.btn-ghost { background: transparent; border-color: var(--border); color: var(--text); }
+   194→.btn-ghost:hover:not(:disabled) { background: var(--surface-2); border-color: var(--zinc-border); }
+   195→
+   196→.btn-danger-ghost:hover:not(:disabled) {
+   197→  border-color: var(--red-border);
+   198→  color: var(--red-bright);
+   199→  background: var(--red-dim);
+   200→}
+   201→
+   202→.btn-block { width: 100%; }
+   203→.btn-sm { padding: 0.35rem 0.8rem; font-size: 0.85rem; border-radius: 10px; }
+   204→
+   205→/* Distinct prominent ghost button for the expert skip */
+   206→.btn-skip {
+   207→  border-color: var(--amber-border);
+   208→  color: var(--amber-bright);
+   209→  background: transparent;
+   210→  margin-top: 1.4rem;
+   211→}
+   212→.btn-skip:hover:not(:disabled) { background: var(--amber-dim); border-color: var(--amber); }
+   213→
+   214→/* ---------- A) upload ---------- */
+   215→
+   216→.hero-title { font-size: 1.8rem; font-weight: 800; text-align: center; margin: 2.2rem 0 0.4rem; }
+   217→.hero-sub {
+   218→  text-align: center;
+   219→  color: var(--text-muted);
+   220→  max-width: 580px;
+   221→  margin: 0 auto 2rem;
+   222→  font-size: 0.98rem;
+   223→}
+   224→
+   225→.dropzone {
+   226→  max-width: 640px;
+   227→  margin: 0 auto;
+   228→  display: flex;
+   229→  flex-direction: column;
+   230→  align-items: center;
+   231→  justify-content: center;
+   232→  gap: 0.3rem;
+   233→  min-height: 220px;
+   234→  padding: 2rem 1.25rem;
+   235→  background: var(--bg-raise);
+   236→  border: 1.5px dashed var(--border);
+   237→  border-radius: var(--radius-lg);
+   238→  cursor: pointer;
+   239→  text-align: center;
+   240→  transition: border-color 0.18s ease, background-color 0.18s ease, transform 0.18s ease, box-shadow 0.18s ease;
+   241→}
+   242→.dropzone:hover { border-color: var(--amber-border); background: #141821; }
+   243→.dropzone.drag {
+   244→  border-color: var(--amber);
+   245→  background: var(--amber-dim);
+   246→  transform: scale(1.01);
+   247→  box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.08);
+   248→}
+   249→.dropzone.loading { pointer-events: none; opacity: 0.92; }
+   250→
+   251→.dz-icon { color: var(--text-faint); transition: color 0.18s ease; margin-bottom: 0.4rem; }
+   252→.dropzone:hover .dz-icon, .dropzone.drag .dz-icon { color: var(--amber); }
+   253→.dz-title { margin: 0.2rem 0 0; font-weight: 700; font-size: 1.05rem; }
+   254→.dz-hint { margin: 0; color: var(--text-muted); font-size: 0.88rem; }
+   255→#dz-spinner { margin-top: 0.9rem; }
+   256→
+   257→.demo-row { max-width: 640px; margin: 1.7rem auto 0; text-align: center; }
+   258→.demo-label { color: var(--text-muted); font-size: 0.9rem; margin: 0 0 0.7rem; }
+   259→.chips { display: flex; flex-wrap: wrap; gap: 0.6rem; justify-content: center; }
+   260→
+   261→.chip {
+   262→  display: inline-flex;
+   263→  align-items: center;
+   264→  gap: 0.4rem;
+   265→  padding: 0.5rem 1rem;
+   266→  border-radius: 999px;
+   267→  border: 1px solid var(--border);
+   268→  background: var(--surface);
+   269→  color: var(--text);
+   270→  font: inherit;
+   271→  font-size: 0.9rem;
+   272→  cursor: pointer;
+   273→  transition: border-color 0.18s ease, background-color 0.18s ease, transform 0.18s ease;
+   274→}
+   275→.chip:hover:not(:disabled) { border-color: var(--amber-border); background: var(--surface-2); transform: translateY(-1px); }
+   276→.chip:active:not(:disabled) { transform: translateY(0) scale(0.98); }
+   277→.chip:disabled { opacity: 0.55; cursor: wait; }
+   278→.chip.loading::after {
+   279→  content: "";
+   280→  width: 12px;
+   281→  height: 12px;
+   282→  border: 2px solid rgba(245, 158, 11, 0.3);
+   283→  border-top-color: var(--amber);
+   284→  border-radius: 50%;
+   285→  display: inline-block;
+   286→  animation: spin 0.8s linear infinite;
+   287→}
+   288→
+   289→/* ---------- spinner ---------- */
+   290→
+   291→.spinner {
+   292→  width: 26px;
+   293→  height: 26px;
+   294→  border-radius: 50%;
+   295→  border: 3px solid rgba(245, 158, 11, 0.25);
+   296→  border-top-color: var(--amber);
+   297→  animation: spin 0.8s linear infinite;
+   298→}
+   299→@keyframes spin { to { transform: rotate(360deg); } }
+   300→
+   301→/* ---------- error box ---------- */
+   302→
+   303→.error-box {
+   304→  max-width: 640px;
+   305→  margin: 1rem auto 0;
+   306→  background: var(--red-dim);
+   307→  border: 1px solid var(--red-border);
+   308→  color: var(--red-soft);
+   309→  border-radius: 12px;
+   310→  padding: 0.75rem 1rem;
+   311→  font-size: 0.9rem;
+   312→  display: flex;
+   313→  flex-wrap: wrap;
+   314→  align-items: center;
+   315→  gap: 0.35rem 0.6rem;
+   316→}
+   317→.error-box[hidden] { display: none; }
+   318→.error-box .ltr-block { font-size: 0.8rem; }
+   319→
+   320→/* ---------- B) assessment ---------- */
+   321→
+   322→.assess-head { text-align: center; margin-top: 2rem; }
+   323→.section-h { font-size: 1.4rem; font-weight: 800; margin: 0 0 0.3rem; }
+   324→.assess-head p { margin: 0; font-size: 0.92rem; }
+   325→
+   326→.questions { margin-top: 1.5rem; display: flex; flex-direction: column; gap: 1rem; }
+   327→.assess-loading {
+   328→  display: flex; align-items: center; justify-content: center; gap: 0.6rem;
+   329→  color: var(--text-muted); padding: 2rem 0;
+   330→}
+   331→
+   332→.q-card { padding: 1.1rem 1.2rem; }
+   333→.q-text { margin: 0 0 0.8rem; font-weight: 700; }
+   334→.q-options { display: flex; flex-wrap: wrap; gap: 0.55rem; }
+   335→
+   336→.opt-btn {
+   337→  padding: 0.5rem 0.95rem;
+   338→  border-radius: 10px;
+   339→  border: 1px solid var(--border);
+   340→  background: var(--bg-raise);
+   341→  color: var(--text);
+   342→  font: inherit;
+   343→  font-size: 0.92rem;
+   344→  cursor: pointer;
+   345→  transition: border-color 0.18s ease, background-color 0.18s ease, color 0.18s ease;
+   346→}
+   347→.opt-btn:hover { border-color: var(--amber-border); }
+   348→.opt-btn[aria-checked="true"] {
+   349→  border-color: var(--amber);
+   350→  background: var(--amber-dim);
+   351→  color: var(--amber-bright);
+   352→  font-weight: 700;
+   353→}
+   354→
+   355→.assess-actions { margin-top: 1.5rem; display: flex; flex-direction: column; gap: 0.5rem; }
+   356→.hint { text-align: center; font-size: 0.85rem; margin: 0; }
+   357→
+   358→/* ---------- C) run ---------- */
+   359→
+   360→.run-head {
+   361→  display: flex;
+   362→  flex-wrap: wrap;
+   363→  gap: 0.9rem;
+   364→  align-items: center;
+   365→  justify-content: space-between;
+   366→  margin: 1.6rem 0 1.2rem;
+   367→}
+   368→.run-title h2 { margin: 0; font-size: 1.2rem; }
+   369→.run-controls { display: flex; flex-wrap: wrap; gap: 0.7rem; align-items: center; }
+   370→
+   371→.seg {
+   372→  display: inline-flex;
+   373→  gap: 2px;
+   374→  padding: 3px;
+   375→  background: var(--bg-raise);
+   376→  border: 1px solid var(--border);
+   377→  border-radius: 999px;
+   378→}
+   379→.seg-btn {
+   380→  border: none;
+   381→  background: transparent;
+   382→  color: var(--text-muted);
+   383→  font: inherit;
+   384→  font-size: 0.88rem;
+   385→  font-weight: 600;
+   386→  padding: 0.4rem 1rem;
+   387→  border-radius: 999px;
+   388→  cursor: pointer;
+   389→  transition: background-color 0.18s ease, color 0.18s ease;
+   390→}
+   391→.seg-btn:hover:not(:disabled) { color: var(--text); }
+   392→.seg-btn[aria-pressed="true"] { background: var(--amber-dim); color: var(--amber-bright); }
+   393→.seg-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+   394→
+   395→/* timeline */
+   396→
+   397→.timeline { list-style: none; margin: 0 0 3rem; padding: 0.2rem 0 0; position: relative; }
+   398→.timeline::before {
+   399→  content: "";
+   400→  position: absolute;
+   401→  inset-inline-start: 7px;
+   402→  top: 0.4rem;
+   403→  bottom: 0.4rem;
+   404→  width: 2px;
+   405→  background: var(--border-soft);
+   406→  border-radius: 2px;
+   407→}
+   408→
+   409→.tl-entry { position: relative; padding-inline-start: 2rem; margin: 0 0 1rem; min-width: 0; }
+   410→
+   411→.tl-dot {
+   412→  position: absolute;
+   413→  inset-inline-start: 2px;
+   414→  top: 0.45rem;
+   415→  width: 12px;
+   416→  height: 12px;
+   417→  border-radius: 50%;
+   418→  background: #3a404d;
+   419→  border: 2px solid var(--bg);
+   420→}
+   421→.dot-amber   { background: var(--amber);   box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.14); }
+   422→.dot-emerald { background: var(--emerald); box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.14); }
+   423→.dot-red     { background: var(--red);     box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.14); }
+   424→
+   425→.card {
+   426→  background: var(--surface);
+   427→  border: 1px solid var(--border);
+   428→  border-radius: var(--radius);
+   429→  padding: 1rem 1.1rem;
+   430→  box-shadow: var(--shadow-soft);
+   431→  min-width: 0;
+   432→}
+   433→
+   434→/* stage markers */
+   435→.stage-box { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem; }
+   436→.stage-fa { font-weight: 800; font-size: 1.05rem; }
+   437→.stage-name { font-size: 0.75rem; color: var(--text-faint); }
+   438→
+   439→/* log lines */
+   440→.log-line {
+   441→  background: var(--deep);
+   442→  border: 1px solid var(--border-soft);
+   443→  border-radius: var(--radius-sm);
+   444→  padding: 0.55rem 0.75rem;
+   445→  font-size: 0.85rem;
+   446→  line-height: 1.6;
+   447→  color: #c3c9d4;
+   448→  white-space: pre-wrap;
+   449→}
+   450→
+   451→/* deploy group */
+   452→.tl-group .group-box {
+   453→  border: 1px solid var(--border-soft);
+   454→  border-inline-start: 3px solid var(--amber);
+   455→  border-radius: var(--radius);
+   456→  background: var(--bg-raise);
+   457→  padding: 0.75rem 0.9rem;
+   458→}
+   459→.group-title { font-weight: 800; margin-bottom: 0.5rem; }
+   460→.group-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.4rem; }
+   461→.deploy-line { font-size: 0.82rem; }
+   462→
+   463→/* risk card */
+   464→.risk-head { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
+   465→.evidence {
+   466→  font-size: 0.8rem;
+   467→  color: var(--text-muted);
+   468→  background: var(--bg-raise);
+   469→  border: 1px solid var(--border-soft);
+   470→  border-radius: 8px;
+   471→  padding: 0.1rem 0.5rem;
+   472→  max-width: 100%;
+   473→}
+   474→.risk-body { margin: 0.6rem 0 0; font-size: 0.95rem; overflow-wrap: anywhere; }
+   475→
+   476→.chip-wrap { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; min-width: 0; }
+   477→.key-chip {
+   478→  background: var(--bg-raise);
+   479→  border: 1px solid var(--border-soft);
+   480→  border-radius: 8px;
+   481→  padding: 0.12rem 0.5rem;
+   482→  font-size: 0.78rem;
+   483→  color: var(--text-muted);
+   484→}
+   485→.risk-keys { margin-top: 0.6rem; }
+   486→
+   487→/* plan card */
+   488→.plan-title { font-weight: 800; color: var(--amber-bright); margin-bottom: 0.3rem; }
+   489→.plan-meta { display: flex; flex-wrap: wrap; gap: 0.4rem 0.9rem; margin: 0.3rem 0; font-size: 0.88rem; min-width: 0; }
+   490→.meta-item { color: var(--text-muted); }
+   491→.meta-val { font-size: 0.85rem; }
+   492→
+   493→.plan-steps { list-style: none; margin: 0.6rem 0; padding: 0; display: flex; flex-direction: column; gap: 0.55rem; }
+   494→.plan-step {
+   495→  display: flex;
+   496→  gap: 0.6rem;
+   497→  align-items: flex-start;
+   498→  background: var(--bg-raise);
+   499→  border: 1px solid var(--border-soft);
+   500→  border-radius: var(--radius-sm);
+   501→  padding: 0.55rem 0.7rem;
+   502→}
+   503→.step-num {
+   504→  flex: none;
+   505→  width: 22px;
+   506→  height: 22px;
+   507→  border-radius: 50%;
+   508→  background: var(--amber-dim);
+   509→  color: var(--amber-bright);
+   510→  font-size: 0.78rem;
+   511→  font-weight: 700;
+   512→  display: flex;
+   513→  align-items: center;
+   514→  justify-content: center;
+   515→  margin-top: 0.15rem;
+   516→}
+   517→.plan-step-body { display: flex; flex-direction: column; gap: 0.1rem; min-width: 0; }
+   518→.plan-step-title { font-weight: 600; font-size: 0.92rem; overflow-wrap: anywhere; }
+   519→.plan-step-detail { color: var(--text-muted); font-size: 0.85rem; overflow-wrap: anywhere; }
+   520→
+   521→.cost-row {
+   522→  display: flex;
+   523→  flex-wrap: wrap;
+   524→  gap: 0.55rem;
+   525→  align-items: center;
+   526→  background: var(--bg-raise);
+   527→  border: 1px solid var(--border-soft);
+   528→  border-radius: 12px;
+   529→  padding: 0.7rem 0.9rem;
+   530→  margin-top: 0.7rem;
+   531→}
+   532→.cost-label { color: var(--text-muted); }
+   533→.cost-val { font-weight: 700; font-size: 1rem; }
+   534→
+   535→.sec-inline-label { display: block; font-size: 0.8rem; color: var(--text-muted); margin: 0.8rem 0 0.4rem; }
+   536→
+   537→/* prepared files (shared: plan card + modal) */
+   538→.files-list { display: flex; flex-direction: column; gap: 0.5rem; }
+   539→.file-item {
+   540→  border: 1px solid var(--border-soft);
+   541→  border-radius: var(--radius-sm);
+   542→  background: var(--bg-raise);
+   543→  min-width: 0;
+   544→}
+   545→.file-item > summary {
+   546→  cursor: pointer;
+   547→  padding: 0.5rem 0.7rem;
+   548→  font-size: 0.85rem;
+   549→  list-style: none;
+   550→  color: var(--text);
+   551→  overflow-wrap: anywhere;
+   552→}
+   553→.file-item > summary::-webkit-details-marker { display: none; }
+   554→.file-item > summary::before { content: "▸ "; color: var(--text-faint); }
+   555→.file-item[open] > summary::before { content: "▾ "; color: var(--amber); }
+   556→.file-item > summary:hover { color: var(--amber-bright); }
+   557→.file-content {
+   558→  margin: 0;
+   559→  padding: 0.7rem 0.8rem;
+   560→  border-top: 1px solid var(--border-soft);
+   561→  background: var(--deep);
+   562→  font-size: 0.8rem;
+   563→  line-height: 1.55;
+   564→  white-space: pre-wrap;
+   565→  max-height: 280px;
+   566→  overflow: auto;
+   567→}
+   568→
+   569→/* fix card (self-repair attempts) */
+   570→.fix-card {
+   571→  background: linear-gradient(0deg, rgba(245, 158, 11, 0.07), rgba(245, 158, 11, 0.07)), var(--surface);
+   572→  border-color: rgba(245, 158, 11, 0.32);
+   573→}
+   574→.fix-title { font-weight: 800; color: var(--amber-bright); margin-bottom: 0.25rem; }
+   575→.fix-reason { margin: 0.15rem 0 0.55rem; }
+   576→.fix-action {
+   577→  background: var(--deep);
+   578→  border: 1px solid var(--border-soft);
+   579→  border-radius: var(--radius-sm);
+   580→  padding: 0.5rem 0.7rem;
+   581→  font-size: 0.83rem;
+   582→  color: #c3c9d4;
+   583→  white-space: pre-wrap;
+   584→}
+   585→
+   586→/* verify card */
+   587→.verify-ok {
+   588→  background: linear-gradient(0deg, rgba(16, 185, 129, 0.07), rgba(16, 185, 129, 0.07)), var(--surface);
+   589→  border-color: var(--emerald-border);
+   590→}
+   591→.verify-fail {
+   592→  background: linear-gradient(0deg, rgba(239, 68, 68, 0.07), rgba(239, 68, 68, 0.07)), var(--surface);
+   593→  border-color: var(--red-border);
+   594→}
+   595→.verify-title { font-weight: 800; margin-bottom: 0.35rem; }
+   596→.verify-ok .verify-title { color: var(--emerald-bright); }
+   597→.verify-fail .verify-title { color: var(--red-bright); }
+   598→.verify-card > * + * { margin-top: 0.4rem; }
+   599→
+   600→.live-link {
+   601→  color: var(--amber-bright);
+   602→  text-decoration: none;
+   603→  display: inline-block;
+   604→  max-width: 100%;
+   605→}
+   606→.live-link:hover { text-decoration: underline; }
+   607→
+   608→/* error / note entries */
+   609→.error-card { border-color: var(--red-border); }
+   610→.error-label { font-weight: 800; color: var(--red-bright); display: inline-block; margin-bottom: 0.25rem; }
+   611→.error-msg { color: var(--red-soft); font-size: 0.85rem; }
+   612→
+   613→.note-text { color: var(--text-muted); font-size: 0.93rem; }
+   614→
+   615→/* ---------- modal ---------- */
+   616→
+   617→.modal-overlay {
+   618→  position: fixed;
+   619→  inset: 0;
+   620→  z-index: 50;
+   621→  display: flex;
+   622→  align-items: center;
+   623→  justify-content: center;
+   624→  padding: 1rem;
+   625→  background: rgba(5, 6, 9, 0.66);
+   626→  backdrop-filter: blur(6px);
+   627→  -webkit-backdrop-filter: blur(6px);
+   628→}
+   629→.modal-overlay[hidden] { display: none; }
+   630→
+   631→.modal {
+   632→  width: 100%;
+   633→  max-width: 560px;
+   634→  max-height: min(86vh, 760px);
+   635→  overflow: auto;
+   636→  background: var(--surface);
+   637→  border: 1px solid var(--border);
+   638→  border-radius: var(--radius-lg);
+   639→  padding: 1.3rem 1.35rem;
+   640→  box-shadow: var(--shadow-pop);
+   641→  animation: fade-in 0.2s ease both;
+   642→}
+   643→
+   644→.modal-title { margin: 0 0 0.2rem; font-size: 1.15rem; font-weight: 800; }
+   645→.modal-sub { margin: 0 0 1rem; font-size: 0.88rem; }
+   646→.question-text { margin: 0 0 0.9rem; font-size: 1rem; line-height: 1.9; }
+   647→
+   648→/* --- mid-run Q&A (T15) --- */
+   649→.ask-box { display: flex; gap: 8px; margin: 10px 0 14px; }
+   650→.ask-box input {
+   651→  flex: 1; min-height: 44px; padding: 0 14px; border-radius: 12px;
+   652→  border: 1px solid var(--border, #2a3040); background: var(--surface-2, #151922);
+   653→  color: inherit; font: inherit;
+   654→}
+   655→.ask-box input:focus-visible { outline: 2px solid var(--primary, #f59e0b); outline-offset: 1px; }
+   656→.ask-q, .ask-a { display: flex; align-items: baseline; gap: 8px; line-height: 1.9; }
+   657→.ask-a { margin-top: 4px; }
+   658→.ask-badge {
+   659→  flex: none; font-size: 0.72rem; padding: 2px 8px; border-radius: 999px;
+   660→  background: #2a3040; color: #cbd5e1;
+   661→}
+   662→.ask-badge-agent { background: rgba(245, 158, 11, 0.15); color: var(--primary, #f59e0b); }
+   663→#ask-reply { width: 100%; margin-bottom: 0.6rem; }
+   664→.modal-sec-title { margin: 1.1rem 0 0.5rem; font-size: 0.95rem; font-weight: 700; }
+   665→.modal .cost-row { margin: 0 0 0.3rem; }
+   666→
+   667→.env-table { display: flex; flex-direction: column; gap: 0.6rem; }
+   668→.env-row {
+   669→  display: grid;
+   670→  grid-template-columns: minmax(120px, 38%) 1fr;
+   671→  gap: 0.6rem;
+   672→  align-items: center;
+   673→}
+   674→.env-key {
+   675→  font-size: 0.85rem;
+   676→  color: var(--text);
+   677→  background: var(--bg-raise);
+   678→  border: 1px solid var(--border-soft);
+   679→  border-radius: 8px;
+   680→  padding: 0.35rem 0.55rem;
+   681→  overflow-wrap: anywhere;
+   682→}
+   683→.env-input {
+   684→  width: 100%;
+   685→  background: var(--deep);
+   686→  border: 1px solid var(--border);
+   687→  border-radius: 8px;
+   688→  padding: 0.5rem 0.7rem;
+   689→  color: var(--text);
+   690→  font-family: var(--mono);
+   691→  font-size: 0.85rem;
+   692→  transition: border-color 0.18s ease;
+   693→}
+   694→.env-input:focus { border-color: var(--amber); outline: none; }
+   695→
+   696→.modal-actions { display: flex; gap: 0.7rem; margin-top: 1.3rem; }
+   697→.modal-actions .btn { flex: 1; }
+   698→
+   699→/* ---------- D) report ---------- */
+   700→
+   701→.report-status {
+   702→  display: flex;
+   703→  flex-wrap: wrap;
+   704→  align-items: center;
+   705→  gap: 0.6rem;
+   706→  padding: 1rem 1.25rem;
+   707→  border-radius: var(--radius);
+   708→  border: 1px solid var(--border);
+   709→  background: var(--surface);
+   710→  margin: 1.8rem 0 1.2rem;
+   711→  font-size: 1.08rem;
+   712→  font-weight: 800;
+   713→  box-shadow: var(--shadow-soft);
+   714→}
+   715→.st-ok   { border-color: var(--emerald-border); background: linear-gradient(0deg, var(--emerald-dim), var(--emerald-dim)), var(--surface); color: var(--emerald-bright); }
+   716→.st-warn { border-color: var(--amber-border);   background: linear-gradient(0deg, var(--amber-dim), var(--amber-dim)), var(--surface);     color: var(--amber-bright); }
+   717→.st-off  { border-color: var(--zinc-border);    background: linear-gradient(0deg, var(--zinc-dim), var(--zinc-dim)), var(--surface);       color: var(--zinc); }
+   718→
+   719→.report-sec { margin-bottom: 1.1rem; }
+   720→.sec-title { font-size: 0.85rem; font-weight: 700; color: var(--text-muted); margin: 0 0 0.6rem; }
+   721→
+   722→.url-box {
+   723→  background: var(--deep);
+   724→  border: 1px solid var(--border-soft);
+   725→  border-radius: var(--radius-sm);
+   726→  padding: 0.7rem 0.85rem;
+   727→  overflow-wrap: anywhere;
+   728→}
+   729→
+   730→.steps-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.5rem; }
+   731→.step-item {
+   732→  background: var(--bg-raise);
+   733→  border: 1px solid var(--border-soft);
+   734→  border-radius: var(--radius-sm);
+   735→  padding: 0.55rem 0.8rem;
+   736→  display: flex;
+   737→  flex-direction: column;
+   738→  gap: 0.1rem;
+   739→}
+   740→.step-title { font-weight: 600; font-size: 0.92rem; overflow-wrap: anywhere; }
+   741→.step-detail { color: var(--text-muted); font-size: 0.85rem; overflow-wrap: anywhere; }
+   742→
+   743→.risk-chip {
+   744→  display: inline-flex;
+   745→  align-items: center;
+   746→  gap: 0.45rem;
+   747→  background: var(--bg-raise);
+   748→  border: 1px solid var(--border);
+   749→  border-radius: 999px;
+   750→  padding: 0.26rem 0.75rem;
+   751→  font-size: 0.8rem;
+   752→  max-width: 100%;
+   753→}
+   754→.risk-chip .ltr-block { font-size: 0.75rem; }
+   755→.sev-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+   756→
+   757→.decisions-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.45rem; }
+   758→.decision-item {
+   759→  background: var(--deep);
+   760→  border: 1px solid var(--border-soft);
+   761→  border-radius: 8px;
+   762→  padding: 0.5rem 0.7rem;
+   763→  font-size: 0.82rem;
+   764→  color: #c3c9d4;
+   765→}
+   766→
+   767→.checklist { list-style: none; margin: 0; padding: 0; }
+   768→.checklist li { position: relative; padding-inline-start: 1.7rem; margin-bottom: 0.5rem; overflow-wrap: anywhere; }
+   769→.checklist li::before {
+   770→  content: "✓";
+   771→  position: absolute;
+   772→  inset-inline-start: 0;
+   773→  top: 0;
+   774→  color: var(--emerald-bright);
+   775→  font-weight: 800;
+   776→}
+   777→
+   778→.learned-card {
+   779→  border-color: var(--emerald-border);
+   780→  background: linear-gradient(0deg, rgba(16, 185, 129, 0.06), rgba(16, 185, 129, 0.06)), var(--surface);
+   781→}
+   782→.learned-title { color: var(--emerald-bright); font-size: 1rem; }
+   783→.next-card {
+   784→  border-color: rgba(245, 158, 11, 0.35);
+   785→  background: linear-gradient(0deg, rgba(245, 158, 11, 0.05), rgba(245, 158, 11, 0.05)), var(--surface);
+   786→}
+   787→
+   788→.report-actions { display: flex; justify-content: center; margin-top: 1.6rem; }
+   789→
+   790→/* ---------- E) expired ---------- */
+   791→
+   792→.expired-card {
+   793→  max-width: 440px;
+   794→  margin: 14vh auto 0;
+   795→  text-align: center;
+   796→  background: var(--surface);
+   797→  border: 1px solid var(--border);
+   798→  border-radius: var(--radius-lg);
+   799→  padding: 2.2rem 1.6rem;
+   800→  box-shadow: var(--shadow-soft);
+   801→}
+   802→.expired-msg { font-size: 1.05rem; margin: 0 0 1.4rem; }
+   803→
+   804→/* ---------- responsive ---------- */
+   805→
+   806→@media (max-width: 560px) {
+   807→  body { font-size: 15px; }
+   808→  .wrap { padding: 0 0.85rem 3rem; }
+   809→  .hero-title { font-size: 1.45rem; margin-top: 1.6rem; }
+   810→  .hero-sub { margin-bottom: 1.5rem; }
+   811→  .topbar { padding: 0.65rem 0.9rem; }
+   812→  .brand-sub { display: none; }
+   813→
+   814→  .dropzone { min-height: 175px; padding: 1.4rem 1rem; }
+   815→
+   816→  .run-head { flex-direction: column; align-items: stretch; }
+   817→  .run-controls { flex-direction: column; align-items: stretch; }
+   818→  .seg { width: 100%; }
+   819→  .seg-btn { flex: 1; }
+   820→
+   821→  .env-row { grid-template-columns: 1fr; }
+   822→  .modal { padding: 1.1rem 1rem; }
+   823→  .modal-actions { flex-direction: column-reverse; }
+   824→
+   825→  .expired-card { margin-top: 8vh; }
+   826→}
+   827→
+   828→@media (prefers-reduced-motion: reduce) {
+   829→  *, *::before, *::after {
+   830→    animation-duration: 0.01ms !important;
+   831→    animation-iteration-count: 1 !important;
+   832→    transition-duration: 0.01ms !important;
+   833→  }
+   834→}
+   835→
+   836→/* ---- T4/T6: risk tiers, ranked causes, post-deploy ops & monitor ---- */
+   837→.tier-badge { font-size: 0.78rem; white-space: nowrap; }
+   838→.tier-badge .tier-level { opacity: 0.85; font-size: 0.72rem; }
+   839→.risk-note { display: block; margin-top: 6px; }
+   840→.causes-list { margin: 10px 0 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+   841→.cause-item { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+   842→.cause-rank {
+   843→  flex: none; width: 22px; height: 22px; border-radius: 50%;
+   844→  display: inline-flex; align-items: center; justify-content: center;
+   845→  background: var(--amber-dim); color: var(--amber-bright); font-size: 0.78rem;
+   846→}
+   847→.cause-text { color: var(--text); font-size: 0.9rem; }
+   848→.cause-evidence { width: 100%; color: var(--text-muted); font-size: 0.8rem; }
+   849→.ops-card .ops-title { font-weight: 600; margin-inline-end: 8px; }
+   850→.ops-card .ops-msg { display: block; margin-top: 6px; font-size: 0.85rem; }
+   851→.ops-denied { border-color: var(--red-border); }
+   852→.risk-legend { margin-bottom: 8px; }
+   853→.ops-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+   854→.ops-btn { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; }
+   855→.ops-btn .tier-badge { font-size: 0.72rem; }
+   856→.monitor-box { margin-top: 10px; display: grid; gap: 8px; }
+   857→.monitor-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 0.9rem; }
+   858→.monitor-row .ltr-block { font-size: 0.85rem; }
+   859→.monitor-src { font-size: 0.78rem; }
+   860→.monitor-history { margin: 4px 0 0; padding: 0; list-style: none; display: flex; gap: 4px; flex-wrap: wrap; }
+   861→.monitor-history li {
+   862→  width: 14px; height: 22px; border-radius: 4px; background: var(--emerald-dim);
+   863→  border: 1px solid var(--emerald-border); position: relative;
+   864→}
+   865→.monitor-history li.bad { background: var(--red-dim); border-color: var(--red-border); }
+   866→.monitor-history li.old { opacity: 0.45; }
+   867→.monitor-alert {
+   868→  background: var(--red-dim); border: 1px solid var(--red-border); color: var(--red-bright);
+   869→  border-radius: 12px; padding: 10px 12px; font-size: 0.9rem;
+   870→}
+   871→.ops-result { background: var(--emerald-dim); border: 1px solid var(--emerald-border); border-radius: 12px; padding: 10px 12px; }
+   872→

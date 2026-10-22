@@ -1,0 +1,1635 @@
+     1→     1→/* ============================================================
+     2→     2→ * LiaraPilot — frontend logic
+     3→     3→ * Vanilla JS, single IIFE, no globals, no dependencies.
+     4→     4→ * Implements API CONTRACT v1 (see worklog.md):
+     5→     5→ *   A) upload  ->  B) assessment  ->  C) run (SSE timeline)  ->  D) report
+     6→     6→ * All technical content (logs, commands, URLs, paths, env keys,
+     7→     7→ * cost numbers) renders inside .ltr-block so it stays readable
+     8→     8→ * inside the RTL page.
+     9→     9→ * ============================================================ */
+    10→    10→(function () {
+    11→    11→  'use strict';
+    12→    12→
+    13→    13→  /* ----------------------------------------------------------
+    14→    14→   * Tiny helpers
+    15→    15→   * ---------------------------------------------------------- */
+    16→    16→
+    17→    17→  function $(sel, root) { return (root || document).querySelector(sel); }
+    18→    18→
+    19→    19→  function esc(value) {
+    20→    20→    return String(value == null ? '' : value).replace(/[&<>"']/g, function (c) {
+    21→    21→      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    22→    22→    });
+    23→    23→  }
+    24→    24→
+    25→    25→  var FA_DIGITS = '۰۱۲۳۴۵۶۷۸۹';
+    26→    26→  function faDigits(v) { return String(v).replace(/[0-9]/g, function (d) { return FA_DIGITS[Number(d)]; }); }
+    27→    27→
+    28→    28→  /** Create an element; `html` is innerHTML (caller must pre-escape). */
+    29→    29→  function el(tag, cls, html) {
+    30→    30→    var n = document.createElement(tag);
+    31→    31→    if (cls) n.className = cls;
+    32→    32→    if (html != null) n.innerHTML = html;
+    33→    33→    return n;
+    34→    34→  }
+    35→    35→
+    36→    36→  var cssEscape = (window.CSS && CSS.escape)
+    37→    37→    ? function (s) { return CSS.escape(s); }
+    38→    38→    : function (s) { return String(s).replace(/[^a-zA-Z0-9_-]/g, function (c) { return '\\' + c; }); };
+    39→    39→
+    40→    40→  var UNVERIFIED_BADGE = 'قیمت تخمینی — نیازمند تأیید (UNVERIFIED)';
+    41→    41→
+    42→    42→  /* ----------------------------------------------------------
+    43→    43→   * Store (single mutable state object)
+    44→    44→   * ---------------------------------------------------------- */
+    45→    45→
+    46→    46→  var store = {
+    47→    47→    sessionId: null,
+    48→    48→    demo: false,          // demo-mode flag -> amber badge in top bar
+    49→    49→    level: 'beginner',    // 'beginner' | 'expert'
+    50→    50→    screen: 'upload',
+    51→    51→    questions: [],
+    52→    52→    answers: {},          // {qid: value}
+    53→    53→    risks: [],            // [{id, payload, bodyEl}] for level re-render
+    54→    54→    report: null,
+    55→    55→    maxI: -1,             // highest rendered event id (hydration + SSE dedupe)
+    56→    56→    eventsSeen: false,    // snapshot had >= 1 event -> session already started
+    57→    57→    hasPlan: false,
+    58→    58→    planEl: null,         // plan card <li> (replaced, never duplicated)
+    59→    59→    deployGroupEl: null,  // <ol> inside the "استقرار" group
+    60→    60→    monitorTimer: null,   // T6 report-screen poll timer
+    61→    61→    es: null,             // EventSource
+    62→    62→    sseTimer: null,
+    63→    63→    sseAttempts: 0,
+    64→    64→    cancelled: false,
+    65→    65→    hydrating: false,
+    66→    66→    pendingApproval: null
+    67→    67→  };
+    68→    68→
+    69→    69→  /* ----------------------------------------------------------
+    70→    70→   * API layer — every call funnels through req() so session
+    71→    71→   * expiry (404 {detail:"session_expired"}) is handled once.
+    72→    72→   * ---------------------------------------------------------- */
+    73→    73→
+    74→    74→  function req(method, url, body) {
+    75→    75→    var opts = { method: method, headers: {} };
+    76→    76→    if (body instanceof FormData) {
+    77→    77→      opts.body = body; // browser sets multipart boundary itself
+    78→    78→    } else if (body !== undefined) {
+    79→    79→      opts.headers['Content-Type'] = 'application/json';
+    80→    80→      opts.body = JSON.stringify(body);
+    81→    81→    }
+    82→    82→    return fetch(url, opts).then(function (res) {
+    83→    83→      return res.text().then(function (text) {
+    84→    84→        var data = null;
+    85→    85→        if (text) { try { data = JSON.parse(text); } catch (e) { data = null; } }
+    86→    86→        if (!res.ok) {
+    87→    87→          var detail = (data && data.detail != null) ? String(data.detail) : '';
+    88→    88→          if (res.status === 404 && /session_expired|expired|not_found|not found/i.test(detail)) {
+    89→    89→            showExpired();
+    90→    90→            var exp = new Error('session_expired');
+    91→    91→            exp.kind = 'expired'; exp.status = 404; exp.detail = detail;
+    92→    92→            throw exp;
+    93→    93→          }
+    94→    94→          var err = new Error(detail || ('http_' + res.status));
+    95→    95→          err.kind = 'http'; err.status = res.status; err.detail = detail;
+    96→    96→          throw err;
+    97→    97→        }
+    98→    98→        return data;
+    99→    99→      });
+   100→   100→    }, function () {
+   101→   101→      var net = new Error('network_error');
+   102→   102→      net.kind = 'network';
+   103→   103→      throw net;
+   104→   104→    });
+   105→   105→  }
+   106→   106→
+   107→   107→  function isExpired(e) { return !!(e && e.kind === 'expired'); }
+   108→   108→
+   109→   109→  var api = {
+   110→   110→    upload: function (fd) { return req('POST', '/api/upload', fd); },
+   111→   111→    demo: function (body) { return req('POST', '/api/sessions/demo', body); },
+   112→   112→    assessment: function () { return req('GET', '/api/assessment'); },
+   113→   113→    answers: function (id, body) { return req('POST', '/api/sessions/' + encodeURIComponent(id) + '/answers', body); },
+   114→   114→    start: function (id) { return req('POST', '/api/sessions/' + encodeURIComponent(id) + '/start'); },
+   115→   115→    snapshot: function (id) { return req('GET', '/api/sessions/' + encodeURIComponent(id)); },
+   116→   116→    approve: function (id, body) { return req('POST', '/api/sessions/' + encodeURIComponent(id) + '/approve', body); },
+   117→   117→    level: function (id, body) { return req('POST', '/api/sessions/' + encodeURIComponent(id) + '/level', body); },
+   118→   118→    cancel: function (id) { return req('POST', '/api/sessions/' + encodeURIComponent(id) + '/cancel'); },
+   119→   119→    ask: function (id, body) { return req('POST', '/api/sessions/' + encodeURIComponent(id) + '/ask', body); },
+   120→   120→    ops: function (id, body) { return req('POST', '/api/sessions/' + encodeURIComponent(id) + '/ops', body); },
+   121→   121→    monitor: function (id) { return req('GET', '/api/sessions/' + encodeURIComponent(id) + '/monitor'); }
+   122→   122→  };
+   123→   123→
+   124→   124→  /* ----------------------------------------------------------
+   125→   125→   * Screens / top bar
+   126→   126→   * ---------------------------------------------------------- */
+   127→   127→
+   128→   128→  var SCREENS = ['upload', 'assessment', 'run', 'report', 'expired'];
+   129→   129→
+   130→   130→  function showScreen(name) {
+   131→   131→    store.screen = name;
+   132→   132→    SCREENS.forEach(function (s) {
+   133→   133→      var node = $('#screen-' + s);
+   134→   134→      if (node) node.hidden = (s !== name);
+   135→   135→    });
+   136→   136→    if (name === 'run') bindAsk();  // mid-run Q&A input (T15)
+   137→   137→    window.scrollTo(0, 0);
+   138→   138→  }
+   139→   139→
+   140→   140→  function updateDemoBadge() { $('#demo-badge').hidden = (store.demo !== true); }
+   141→   141→
+   142→   142→  function showExpired() {
+   143→   143→    if (store.screen === 'expired') return;
+   144→   144→    stopSSE();
+   145→   145→    closeModal();
+   146→   146→    showScreen('expired');
+   147→   147→  }
+   148→   148→
+   149→   149→  function disableInputs(dis) {
+   150→   150→    $('#btn-cancel').disabled = dis || store.cancelled;
+   151→   151→    $('#lvl-beginner').disabled = dis;
+   152→   152→    $('#lvl-expert').disabled = dis;
+   153→   153→  }
+   154→   154→
+   155→   155→  /* ----------------------------------------------------------
+   156→   156→   * A) Upload screen
+   157→   157→   * ---------------------------------------------------------- */
+   158→   158→
+   159→   159→  var DZ_TITLE = 'فایل zip پروژه را اینجا رها کن';
+   160→   160→  var DZ_TITLE_BUSY = 'در حال آپلود پروژه…';
+   161→   161→
+   162→   162→  function setUploadLoading(on) {
+   163→   163→    var dz = $('#dropzone');
+   164→   164→    dz.classList.toggle('loading', on);
+   165→   165→    $('#dz-spinner').hidden = !on;
+   166→   166→    $('#dz-title').textContent = on ? DZ_TITLE_BUSY : DZ_TITLE;
+   167→   167→    var chips = document.querySelectorAll('.chip');
+   168→   168→    for (var i = 0; i < chips.length; i++) chips[i].disabled = on;
+   169→   169→  }
+   170→   170→
+   171→   171→  function showUploadError(prefix, detail) {
+   172→   172→    var err = $('#upload-error');
+   173→   173→    err.innerHTML = '';
+   174→   174→    err.appendChild(document.createTextNode(prefix));
+   175→   175→    if (detail) err.appendChild(el('span', 'ltr-block', esc(detail)));
+   176→   176→    err.hidden = false;
+   177→   177→  }
+   178→   178→
+   179→   179→  function uploadFile(file) {
+   180→   180→    if (!file) return;
+   181→   181→    $('#upload-error').hidden = true;
+   182→   182→    var isZip = /\.zip$/i.test(file.name) || /zip/i.test(file.type || '');
+   183→   183→    if (!isZip) {
+   184→   184→      showUploadError('فقط فایل zip پذیرفته می‌شود.', null);
+   185→   185→      return;
+   186→   186→    }
+   187→   187→    setUploadLoading(true);
+   188→   188→    var fd = new FormData();
+   189→   189→    fd.append('file', file, file.name);
+   190→   190→    api.upload(fd).then(function (data) {
+   191→   191→      store.sessionId = data.session_id;
+   192→   192→      if (data.demo === true) { store.demo = true; updateDemoBadge(); }
+   193→   193→      return goAssessment();
+   194→   194→    }).catch(function (e) {
+   195→   195→      setUploadLoading(false);
+   196→   196→      if (isExpired(e)) return;
+   197→   197→      showUploadError('آپلود ناموفق بود. دوباره تلاش کن.', e.detail || (e.kind === 'network' ? 'اتصال به سرور برقرار نشد.' : ''));
+   198→   198→    });
+   199→   199→  }
+   200→   200→
+   201→   201→  function demoFixture(key, chipBtn) {
+   202→   202→    $('#upload-error').hidden = true;
+   203→   203→    var chips = document.querySelectorAll('.chip');
+   204→   204→    for (var i = 0; i < chips.length; i++) chips[i].disabled = true;
+   205→   205→    if (chipBtn) chipBtn.classList.add('loading');
+   206→   206→    api.demo({ fixture: key }).then(function (data) {
+   207→   207→      store.sessionId = data.session_id;
+   208→   208→      if (data.demo === true) { store.demo = true; updateDemoBadge(); }
+   209→   209→      return goAssessment();
+   210→   210→    }).catch(function (e) {
+   211→   211→      for (var j = 0; j < chips.length; j++) chips[j].disabled = false;
+   212→   212→      if (chipBtn) chipBtn.classList.remove('loading');
+   213→   213→      if (isExpired(e)) return;
+   214→   214→      showUploadError('ساخت پروژهٔ نمونه ناموفق بود.', e.detail || (e.kind === 'network' ? 'اتصال به سرور برقرار نشد.' : ''));
+   215→   215→    });
+   216→   216→  }
+   217→   217→
+   218→   218→  function wireUpload() {
+   219→   219→    var dz = $('#dropzone');
+   220→   220→    dz.addEventListener('click', function () {
+   221→   221→      if (!dz.classList.contains('loading')) $('#file-input').click();
+   222→   222→    });
+   223→   223→    dz.addEventListener('keydown', function (ev) {
+   224→   224→      if (ev.key === 'Enter' || ev.key === ' ' || ev.key === 'Spacebar') {
+   225→   225→        ev.preventDefault();
+   226→   226→        if (!dz.classList.contains('loading')) $('#file-input').click();
+   227→   227→      }
+   228→   228→    });
+   229→   229→    ['dragenter', 'dragover'].forEach(function (t) {
+   230→   230→      dz.addEventListener(t, function (ev) { ev.preventDefault(); dz.classList.add('drag'); });
+   231→   231→    });
+   232→   232→    ['dragleave', 'drop'].forEach(function (t) {
+   233→   233→      dz.addEventListener(t, function (ev) { ev.preventDefault(); dz.classList.remove('drag'); });
+   234→   234→    });
+   235→   235→    dz.addEventListener('drop', function (ev) {
+   236→   236→      var f = ev.dataTransfer && ev.dataTransfer.files && ev.dataTransfer.files[0];
+   237→   237→      if (f) uploadFile(f);
+   238→   238→    });
+   239→   239→    $('#file-input').addEventListener('change', function (ev) {
+   240→   240→      var f = ev.target.files && ev.target.files[0];
+   241→   241→      if (f) uploadFile(f);
+   242→   242→      ev.target.value = '';
+   243→   243→    });
+   244→   244→    var chips = document.querySelectorAll('.chip');
+   245→   245→    for (var i = 0; i < chips.length; i++) {
+   246→   246→      (function (chip) {
+   247→   247→        chip.addEventListener('click', function () { demoFixture(chip.dataset.fixture, chip); });
+   248→   248→      })(chips[i]);
+   249→   249→    }
+   250→   250→  }
+   251→   251→
+   252→   252→  /* ----------------------------------------------------------
+   253→   253→   * B) Assessment screen
+   254→   254→   * ---------------------------------------------------------- */
+   255→   255→
+   256→   256→  function goAssessment() {
+   257→   257→    showScreen('assessment');
+   258→   258→    var box = $('#questions');
+   259→   259→    var err = $('#assess-error');
+   260→   260→    err.hidden = true;
+   261→   261→    $('#btn-start').disabled = true;
+   262→   262→    $('#btn-expert-skip').disabled = true;
+   263→   263→    box.innerHTML = '';
+   264→   264→    box.appendChild(el('div', 'assess-loading',
+   265→   265→      '<span class="spinner" aria-hidden="true"></span><span>در حال گرفتن سؤال‌ها…</span>'));
+   266→   266→
+   267→   267→    return api.assessment().then(function (data) {
+   268→   268→      store.questions = (data && Array.isArray(data.questions)) ? data.questions : [];
+   269→   269→      store.expertSkip = (data && data.expert_skip) || {};
+   270→   270→      var skipBtn = $('#btn-expert-skip');
+   271→   271→      skipBtn.textContent = store.expertSkip.label || 'رد کردن سؤال‌ها (حالت کارشناس)';
+   272→   272→      skipBtn.disabled = false;
+   273→   273→      box.innerHTML = '';
+   274→   274→      if (!store.questions.length) {
+   275→   275→        box.appendChild(el('p', 'muted', 'سؤالی برای تو ندارم؛ مستقیم شروع می‌کنیم.'));
+   276→   276→      }
+   277→   277→      store.questions.forEach(function (q) { box.appendChild(questionCard(q)); });
+   278→   278→      updateStartState();
+   279→   279→    }).catch(function (e) {
+   280→   280→      if (isExpired(e)) return;
+   281→   281→      box.innerHTML = '';
+   282→   282→      var errBox = $('#assess-error');
+   283→   283→      errBox.innerHTML = '';
+   284→   284→      errBox.appendChild(document.createTextNode('دریافت سؤال‌ها ناموفق بود. '));
+   285→   285→      var retry = el('button', 'btn btn-ghost btn-sm', 'تلاش دوباره');
+   286→   286→      retry.type = 'button';
+   287→   287→      retry.addEventListener('click', function () { goAssessment(); });
+   288→   288→      errBox.appendChild(retry);
+   289→   289→      errBox.hidden = false;
+   290→   290→    });
+   291→   291→  }
+   292→   292→
+   293→   293→  function questionCard(q) {
+   294→   294→    var card = el('div', 'card q-card');
+   295→   295→    card.setAttribute('role', 'radiogroup');
+   296→   296→    card.setAttribute('aria-label', q.text || 'سؤال');
+   297→   297→    card.appendChild(el('p', 'q-text', esc(q.text || '')));
+   298→   298→    var opts = el('div', 'q-options');
+   299→   299→    (q.options || []).forEach(function (o) {
+   300→   300→      var b = el('button', 'opt-btn');
+   301→   301→      b.type = 'button';
+   302→   302→      b.setAttribute('role', 'radio');
+   303→   303→      b.setAttribute('aria-checked', 'false');
+   304→   304→      b.dataset.value = (o.value != null) ? String(o.value) : '';
+   305→   305→      b.textContent = (o.label != null) ? String(o.label) : b.dataset.value;
+   306→   306→      b.addEventListener('click', function () {
+   307→   307→        var siblings = opts.querySelectorAll('.opt-btn');
+   308→   308→        for (var i = 0; i < siblings.length; i++) siblings[i].setAttribute('aria-checked', 'false');
+   309→   309→        b.setAttribute('aria-checked', 'true');
+   310→   310→        store.answers[q.id] = b.dataset.value; // exactly one option per question
+   311→   311→        updateStartState();
+   312→   312→      });
+   313→   313→      opts.appendChild(b);
+   314→   314→    });
+   315→   315→    card.appendChild(opts);
+   316→   316→    return card;
+   317→   317→  }
+   318→   318→
+   319→   319→  function updateStartState() {
+   320→   320→    var qs = store.questions;
+   321→   321→    var all = qs.length === 0 || qs.every(function (q) { return store.answers[q.id] !== undefined; });
+   322→   322→    $('#btn-start').disabled = !all;
+   323→   323→    $('#assess-hint').textContent = all
+   324→   324→      ? 'هر لحظه آماده‌ام — دکمهٔ «شروع بررسی» را بزن.'
+   325→   325→      : 'برای شروع، به همهٔ سؤال‌ها پاسخ بده.';
+   326→   326→  }
+   327→   327→
+   328→   328→  function submitAnswers(skipExpert) {
+   329→   329→    var btn = skipExpert ? $('#btn-expert-skip') : $('#btn-start');
+   330→   330→    btn.disabled = true;
+   331→   331→    var payload = skipExpert
+   332→   332→      ? { answers: {}, skip_expert: true }
+   333→   333→      : { answers: shallowCopy(store.answers), skip_expert: false };
+   334→   334→    api.answers(store.sessionId, payload).then(function (res) {
+   335→   335→      if (res && (res.level === 'beginner' || res.level === 'expert')) store.level = res.level;
+   336→   336→      return enterRun();
+   337→   337→    }).catch(function (e) {
+   338→   338→      if (isExpired(e)) return;
+   339→   339→      btn.disabled = false;
+   340→   340→      var errBox = $('#assess-error');
+   341→   341→      errBox.innerHTML = '';
+   342→   342→      errBox.appendChild(document.createTextNode('ثبت پاسخ‌ها ناموفق بود. دوباره تلاش کن.'));
+   343→   343→      if (e.detail) errBox.appendChild(el('span', 'ltr-block', esc(e.detail)));
+   344→   344→      errBox.hidden = false;
+   345→   345→    });
+   346→   346→  }
+   347→   347→
+   348→   348→  function shallowCopy(obj) {
+   349→   349→    var out = {};
+   350→   350→    for (var k in obj) { if (Object.prototype.hasOwnProperty.call(obj, k)) out[k] = obj[k]; }
+   351→   351→    return out;
+   352→   352→  }
+   353→   353→
+   354→   354→  /* ----------------------------------------------------------
+   355→   355→   * C) Run screen — entry, hydration, SSE
+   356→   356→   * ---------------------------------------------------------- */
+   357→   357→
+   358→   358→  function enterRun() {
+   359→   359→    showScreen('run');
+   360→   360→    setLevelUI();
+   361→   361→    disableInputs(false);
+   362→   362→    $('#stage-title').textContent = 'در حال آماده‌سازی…';
+   363→   363→
+   364→   364→    return hydrate().then(function (snap) {
+   365→   365→      if (store.screen !== 'run') return; // redirected (expired / report)
+   366→   366→      var st = snap ? String(snap.status || '').toLowerCase() : '';
+   367→   367→
+   368→   368→      // Session already finished before we got here.
+   369→   369→      if (store.report && /done|success|finish|complete/.test(st)) { goReport(); return; }
+   370→   370→      if (/cancel/.test(st)) {
+   371→   371→        store.cancelled = true;
+   372→   372→        addNote('لغو شد');
+   373→   373→        disableInputs(true);
+   374→   374→        return;
+   375→   375→      }
+   376→   376→
+   377→   377→      openSSE();
+   378→   378→
+   379→   379→      // Only start the agent for a fresh session (no prior events, no
+   380→   380→      // running/approval status in the snapshot).
+   381→   381→      var resumed = store.eventsSeen || /run|deploy|assess|inspect|plan|approv|start/.test(st);
+   382→   382→      if (!resumed) {
+   383→   383→        api.start(store.sessionId).catch(function (e) {
+   384→   384→          if (isExpired(e)) return;
+   385→   385→          if (e.status === 409 || /already/i.test(String(e.detail || ''))) return; // already started
+   386→   386→          rError({ message: e.detail || ('start failed: ' + (e.status || 'network')) });
+   387→   387→        });
+   388→   388→      }
+   389→   389→    });
+   390→   390→  }
+   391→   391→
+   392→   392→  /** GET snapshot once, replay stored events oldest-first. */
+   393→   393→  function hydrate() {
+   394→   394→    store.hydrating = true;
+   395→   395→    return api.snapshot(store.sessionId).then(function (snap) {
+   396→   396→      snap = snap || {};
+   397→   397→      if (snap.demo === true) { store.demo = true; updateDemoBadge(); }
+   398→   398→      if (snap.level === 'beginner' || snap.level === 'expert') {
+   399→   399→        store.level = snap.level;
+   400→   400→        setLevelUI();
+   401→   401→      }
+   402→   402→      var evs = Array.isArray(snap.events) ? snap.events.slice() : [];
+   403→   403→      evs.sort(function (a, b) { return (a && a.i ? a.i : 0) - (b && b.i ? b.i : 0); });
+   404→   404→      store.eventsSeen = evs.length > 0;
+   405→   405→
+   406→   406→      var approvalPayload = null;
+   407→   407→      var seenApproval = false;
+   408→   408→      var afterApproval = false;
+   409→   409→
+   410→   410→      evs.forEach(function (ev) {
+   411→   411→        if (!ev || !ev.type) return;
+   412→   412→        if (ev.type === 'approval_required') {
+   413→   413→          approvalPayload = ev.payload || {};
+   414→   414→          seenApproval = true;
+   415→   415→          afterApproval = false;
+   416→   416→        } else if (seenApproval) {
+   417→   417→          afterApproval = true;
+   418→   418→        }
+   419→   419→        handleEvent(ev.i, ev.type, ev.payload || {});
+   420→   420→      });
+   421→   421→
+   422→   422→      // Fallbacks for data the snapshot exposes outside the event list.
+   423→   423→      if (snap.plan && !store.hasPlan) handleEvent(null, 'plan', snap.plan);
+   424→   424→      if (snap.report) store.report = snap.report;
+   425→   425→
+   426→   426→      // Pending approval: snapshot field wins (note not yet shown for it);
+   427→   427→      // otherwise an approval_required that is still the newest event means
+   428→   428→      // the user has not decided yet (its note was already added by the
+   429→   429→      // event route during replay above — do not duplicate it).
+   430→   430→      var st = String(snap.status || '').toLowerCase();
+   431→   431→      if (snap.approval) {
+   432→   432→        addNote('خلبان برای ادامه نیاز به تأیید تو دارد.');
+   433→   433→        openApprovalModal(snap.approval);
+   434→   434→      } else if (approvalPayload && !afterApproval && !store.cancelled && !/done|cancel|success/.test(st)) {
+   435→   435→        openApprovalModal(approvalPayload);
+   436→   436→      }
+   437→   437→
+   438→   438→      store.hydrating = false;
+   439→   439→      scrollTimeline();
+   440→   440→      return snap;
+   441→   441→    }).catch(function (e) {
+   442→   442→      store.hydrating = false;
+   443→   443→      if (isExpired(e)) return null;
+   444→   444→      // Non-fatal: SSE replay (no Last-Event-ID yet -> full replay) covers us.
+   445→   445→      addNote('دریافت وضعیت قبلی ناموفق بود؛ ادامه می‌دهیم.');
+   446→   446→      return null;
+   447→   447→    });
+   448→   448→  }
+   449→   449→
+   450→   450→  /**
+   451→   451→   * SSE with manual reconnect: close on error, wait 2s, reopen the SAME
+   452→   452→   * URL (never add cache-busters — that would defeat Last-Event-ID replay
+   453→   453→   * semantics server-side). A freshly reopened EventSource has no
+   454→   454→   * Last-Event-ID, so the server may replay old messages; handleEvent()
+   455→   455→   * drops anything with id <= store.maxI, so nothing renders twice.
+   456→   456→   */
+   457→   457→  function openSSE() {
+   458→   458→    stopSSE();
+   459→   459→    if (!store.sessionId || store.screen === 'report' || store.screen === 'expired') return;
+   460→   460→    var es = new EventSource('/api/events/' + encodeURIComponent(store.sessionId));
+   461→   461→    store.es = es;
+   462→   462→    store.sseAttempts = 0;
+   463→   463→
+   464→   464→    es.onopen = function () { store.sseAttempts = 0; };
+   465→   465→
+   466→   466→    es.onmessage = function (ev) {
+   467→   467→      var msg = null;
+   468→   468→      try { msg = JSON.parse(ev.data); } catch (e) { return; }
+   469→   469→      if (!msg || typeof msg !== 'object' || !msg.type) return;
+   470→   470→      var payload = shallowCopy(msg);
+   471→   471→      delete payload.type;
+   472→   472→      handleEvent(ev.lastEventId, msg.type, payload);
+   473→   473→    };
+   474→   474→
+   475→   475→    es.onerror = function () {
+   476→   476→      // Native reconnect retries forever; we take over to cap attempts.
+   477→   477→      try { es.close(); } catch (e) { /* noop */ }
+   478→   478→      if (store.es === es) store.es = null;
+   479→   479→      store.sseAttempts += 1;
+   480→   480→      if (store.sseAttempts >= 10) { showExpired(); return; }
+   481→   481→      store.sseTimer = setTimeout(openSSE, 2000);
+   482→   482→    };
+   483→   483→  }
+   484→   484→
+   485→   485→  function stopSSE() {
+   486→   486→    if (store.sseTimer) { clearTimeout(store.sseTimer); store.sseTimer = null; }
+   487→   487→    if (store.es) {
+   488→   488→      try { store.es.close(); } catch (e) { /* noop */ }
+   489→   489→      store.es = null;
+   490→   490→    }
+   491→   491→  }
+   492→   492→
+   493→   493→  /** Central event gate: dedupes by integer id, then routes by type. */
+   494→   494→  function handleEvent(rawId, type, payload) {
+   495→   495→    if (rawId !== undefined && rawId !== null && String(rawId) !== '') {
+   496→   496→      var n = Number(rawId);
+   497→   497→      if (Number.isFinite(n)) {
+   498→   498→        if (n <= store.maxI) return; // already rendered (hydration / replay)
+   499→   499→        store.maxI = n;
+   500→   500→      }
+   501→   501→    }
+   502→   502→    var fn = ROUTES[type];
+   503→   503→    if (fn) fn(payload || {});
+   504→   504→  }
+   505→   505→
+   506→   506→  /* ----------------------------------------------------------
+   507→   507→   * Timeline building blocks
+   508→   508→   * ---------------------------------------------------------- */
+   509→   509→
+   510→   510→  function timelineEl() { return $('#timeline'); }
+   511→   511→
+   512→   512→  function tlItem(cls, dotCls) {
+   513→   513→    var li = el('li', 'tl-entry ' + (cls || ''));
+   514→   514→    li.appendChild(el('span', 'tl-dot ' + (dotCls || '')));
+   515→   515→    return li;
+   516→   516→  }
+   517→   517→
+   518→   518→  function scrollTimeline() {
+   519→   519→    if (store.hydrating) return; // batch scroll once after hydration
+   520→   520→    var tl = timelineEl();
+   521→   521→    var last = tl.lastElementChild;
+   522→   522→    if (last && typeof last.scrollIntoView === 'function') {
+   523→   523→      try { last.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
+   524→   524→      catch (e) { last.scrollIntoView(); }
+   525→   525→    }
+   526→   526→  }
+   527→   527→
+   528→   528→  function addNote(text) {
+   529→   529→    var li = tlItem('tl-note', '');
+   530→   530→    li.appendChild(el('span', 'note-text', esc(text)));
+   531→   531→    timelineEl().appendChild(li);
+   532→   532→    scrollTimeline();
+   533→   533→  }
+   534→   534→
+   535→   535→  function ensureDeployGroup() {
+   536→   536→    if (store.deployGroupEl && store.deployGroupEl.isConnected) return store.deployGroupEl;
+   537→   537→    var li = el('li', 'tl-entry tl-group');
+   538→   538→    li.appendChild(el('span', 'tl-dot dot-amber'));
+   539→   539→    var box = el('div', 'group-box');
+   540→   540→    box.appendChild(el('div', 'group-title', 'استقرار'));
+   541→   541→    var list = el('ol', 'group-list');
+   542→   542→    box.appendChild(list);
+   543→   543→    li.appendChild(box);
+   544→   544→    timelineEl().appendChild(li);
+   545→   545→    store.deployGroupEl = list;
+   546→   546→    return list;
+   547→   547→  }
+   548→   548→
+   549→   549→  /* ----------------------------------------------------------
+   550→   550→   * SSE event route handlers (one per server event type)
+   551→   551→   * ---------------------------------------------------------- */
+   552→   552→
+   553→   553→  function rStage(p) {
+   554→   554→    if (p.fa) $('#stage-title').textContent = p.fa;
+   555→   555→    syncStepper(p.name); // presentational pipeline stepper (task 4-a)
+   556→   556→    var li = tlItem('tl-stage', 'dot-amber');
+   557→   557→    var box = el('div', 'stage-box');
+   558→   558→    box.appendChild(el('span', 'stage-fa', esc(p.fa || p.name || '')));
+   559→   559→    if (p.name) box.appendChild(el('span', 'stage-name ltr-block', esc(p.name)));
+   560→   560→    li.appendChild(box);
+   561→   561→    timelineEl().appendChild(li);
+   562→   562→    scrollTimeline();
+   563→   563→  }
+   564→   564→
+   565→   565→  function rLog(p) {
+   566→   566→    var li = tlItem('tl-log', '');
+   567→   567→    var line = el('div', 'log-line ltr-block' + logLevelCls(p.text));
+   568→   568→    line.textContent = (p.text != null) ? String(p.text) : '';
+   569→   569→    li.appendChild(line);
+   570→   570→    timelineEl().appendChild(li);
+   571→   571→    scrollTimeline();
+   572→   572→  }
+   573→   573→
+   574→   574→  function rDeployLog(p) {
+   575→   575→    var list = ensureDeployGroup();
+   576→   576→    var row = el('li', 'log-line deploy-line ltr-block' + logLevelCls(p.text));
+   577→   577→    row.textContent = (p.text != null) ? String(p.text) : '';
+   578→   578→    list.appendChild(row);
+   579→   579→    scrollTimeline();
+   580→   580→  }
+   581→   581→
+   582→   582→  var SEV = {
+   583→   583→    high:   { label: 'بالا',   badgeCls: 'badge-red',   dotCls: 'dot-red' },
+   584→   584→    medium: { label: 'متوسط', badgeCls: 'badge-amber', dotCls: 'dot-amber' },
+   585→   585→    low:    { label: 'کم',    badgeCls: 'badge-zinc',  dotCls: '' }
+   586→   586→  };
+   587→   587→
+   588→   588→  function riskBodyText(p) {
+   589→   589→    return (store.level === 'expert')
+   590→   590→      ? (p.expert_text || p.detail || '')
+   591→   591→      : (p.beginner_text || p.detail || '');
+   592→   592→  }
+   593→   593→
+   594→   594→  function rRisk(p) {
+   595→   595→    var sev = SEV[p.severity] || SEV.low;
+   596→   596→    var riskId = (p.id != null) ? String(p.id) : null;
+   597→   597→
+   598→   598→    // Upsert: same risk id twice -> refresh body only.
+   599→   599→    for (var i = 0; i < store.risks.length; i++) {
+   600→   600→      if (riskId !== null && store.risks[i].id === riskId) {
+   601→   601→        store.risks[i].payload = p;
+   602→   602→        if (store.risks[i].bodyEl && store.risks[i].bodyEl.isConnected) {
+   603→   603→          store.risks[i].bodyEl.textContent = riskBodyText(p);
+   604→   604→        }
+   605→   605→        return;
+   606→   606→      }
+   607→   607→    }
+   608→   608→
+   609→   609→    var li = tlItem('tl-card', sev.dotCls);
+   610→   610→    if (riskId) li.dataset.riskId = riskId;
+   611→   611→    var card = el('div', 'card risk-card' + (p.severity ? ' sev-' + p.severity : ''));
+   612→   612→
+   613→   613→    var head = el('div', 'risk-head');
+   614→   614→    head.appendChild(el('span', 'badge ' + sev.badgeCls, sev.label));
+   615→   615→    if (p.evidence_file) head.appendChild(el('span', 'evidence ltr-block', esc(p.evidence_file)));
+   616→   616→    card.appendChild(head);
+   617→   617→
+   618→   618→    var body = el('p', 'risk-body');
+   619→   619→    body.setAttribute('data-risk-body', '');
+   620→   620→    body.textContent = riskBodyText(p);
+   621→   621→    card.appendChild(body);
+   622→   622→
+   623→   623→    if (Array.isArray(p.concept_keys) && p.concept_keys.length) {
+   624→   624→      var keys = el('div', 'chip-wrap risk-keys');
+   625→   625→      p.concept_keys.forEach(function (k) {
+   626→   626→        keys.appendChild(el('span', 'key-chip ltr-block', esc(k)));
+   627→   627→      });
+   628→   628→      card.appendChild(keys);
+   629→   629→    }
+   630→   630→
+   631→   631→    li.appendChild(card);
+   632→   632→    timelineEl().appendChild(li);
+   633→   633→    store.risks.push({ id: riskId, payload: p, bodyEl: body });
+   634→   634→    scrollTimeline();
+   635→   635→  }
+   636→   636→
+   637→   637→  /** Re-render risk bodies after a level change (beginner <-> expert). */
+   638→   638→  function renderRiskBodies() {
+   639→   639→    store.risks.forEach(function (r) {
+   640→   640→      if (r.bodyEl && r.bodyEl.isConnected) r.bodyEl.textContent = riskBodyText(r.payload);
+   641→   641→    });
+   642→   642→  }
+   643→   643→
+   644→   644→  function rPlan(p) {
+   645→   645→    store.hasPlan = true;
+   646→   646→    if (store.planEl && store.planEl.isConnected) store.planEl.remove(); // replace, never duplicate
+   647→   647→
+   648→   648→    var li = tlItem('tl-card', 'dot-amber');
+   649→   649→    var card = el('div', 'card plan-card');
+   650→   650→    card.appendChild(el('div', 'plan-title', 'برنامهٔ استقرار'));
+   651→   651→
+   652→   652→    var meta = el('div', 'plan-meta');
+   653→   653→    if (p.platform) {
+   654→   654→      meta.appendChild(el('span', 'meta-item', 'پلتفرم: '));
+   655→   655→      meta.appendChild(el('span', 'meta-val ltr-block', esc(p.platform)));
+   656→   656→    }
+   657→   657→    if (p.port != null && p.port !== '') {
+   658→   658→      meta.appendChild(el('span', 'meta-item', 'پورت: '));
+   659→   659→      meta.appendChild(el('span', 'meta-val ltr-block', esc(p.port)));
+   660→   660→    }
+   661→   661→    if (meta.childElementCount) card.appendChild(meta);
+   662→   662→
+   663→   663→    if (Array.isArray(p.steps) && p.steps.length) {
+   664→   664→      var ol = el('ol', 'plan-steps');
+   665→   665→      p.steps.forEach(function (s, i) {
+   666→   666→        var item = el('li', 'plan-step');
+   667→   667→        item.appendChild(el('span', 'step-num', faDigits(i + 1)));
+   668→   668→        var body = el('div', 'plan-step-body');
+   669→   669→        var title = (s && (s.title_fa || s.title)) || ('مرحلهٔ ' + faDigits(i + 1));
+   670→   670→        body.appendChild(el('span', 'plan-step-title', esc(title)));
+   671→   671→        if (s && s.detail) body.appendChild(el('span', 'plan-step-detail', esc(s.detail)));
+   672→   672→        item.appendChild(body);
+   673→   673→        ol.appendChild(item);
+   674→   674→      });
+   675→   675→      card.appendChild(ol);
+   676→   676→    }
+   677→   677→
+   678→   678→    var costRow = el('div', 'cost-row');
+   679→   679→    costRow.appendChild(el('span', 'cost-label', 'هزینهٔ تخمینی:'));
+   680→   680→    costRow.appendChild(el('span', 'cost-val ltr-block', esc(p.estimated_cost != null ? p.estimated_cost : '—')));
+   681→   681→    if (p.cost_unverified) costRow.appendChild(el('span', 'badge badge-amber', UNVERIFIED_BADGE));
+   682→   682→    card.appendChild(costRow);
+   683→   683→
+   684→   684→    var envItems = normalizeEnv(p.env_needed);
+   685→   685→    if (envItems.length) {
+   686→   686→      var envWrap = el('div', 'chip-wrap');
+   687→   687→      envWrap.appendChild(el('span', 'sec-inline-label', 'متغیرهای محیطی موردنیاز:'));
+   688→   688→      envItems.forEach(function (it) {
+   689→   689→        envWrap.appendChild(el('span', 'key-chip ltr-block', esc(it.key)));
+   690→   690→      });
+   691→   691→      card.appendChild(envWrap);
+   692→   692→    }
+   693→   693→
+   694→   694→    if (Array.isArray(p.prepared_files) && p.prepared_files.length) {
+   695→   695→      card.appendChild(el('span', 'sec-inline-label', 'فایل‌های آماده‌شده:'));
+   696→   696→      card.appendChild(preparedFilesBlock(p.prepared_files));
+   697→   697→    }
+   698→   698→
+   699→   699→    li.appendChild(card);
+   700→   700→    timelineEl().appendChild(li);
+   701→   701→    store.planEl = li;
+   702→   702→    scrollTimeline();
+   703→   703→  }
+   704→   704→
+   705→   705→  function rApproval(p) {
+   706→   706→    addNote('خلبان برای ادامه نیاز به تأیید تو دارد.');
+   707→   707→    setStep(3); // stepper: تأیید
+   708→   708→    openApprovalModal(p);
+   709→   709→  }
+   710→   710→
+   711→   711→  function rFix(p) {
+   712→   712→    setStep(5); // stepper: اصلاح
+   713→   713→    var li = tlItem('tl-card', 'dot-amber');
+   714→   714→    var card = el('div', 'card fix-card');
+   715→   715→    var attempt = (p.attempt != null) ? faDigits(p.attempt) : '؟';
+   716→   716→    var maxA = (p.max_attempts != null) ? faDigits(p.max_attempts) : '؟';
+   717→   717→    card.appendChild(el('div', 'fix-title', 'تلاش خودکار ' + attempt + ' از ' + maxA));
+   718→   718→    if (p.reason_fa) card.appendChild(el('p', 'fix-reason', esc(p.reason_fa)));
+   719→   719→    if (p.action) {
+   720→   720→      var act = el('div', 'fix-action ltr-block');
+   721→   721→      act.textContent = String(p.action);
+   722→   722→      card.appendChild(act);
+   723→   723→    }
+   724→   724→    // Risk tier badge (T4): every action shows its tier + context note.
+   725→   725→    if (p.risk_tier && p.risk_tier.tier) card.appendChild(tierBadge(p.risk_tier));
+   726→   726→    if (p.risk_note_fa) card.appendChild(el('span', 'risk-note muted small', esc(p.risk_note_fa)));
+   727→   727→    // Ranked causes for unscripted failures (T3): quote-only evidence.
+   728→   728→    if (Array.isArray(p.causes_ranked) && p.causes_ranked.length) {
+   729→   729→      var cwrap = el('ul', 'causes-list');
+   730→   730→      p.causes_ranked.forEach(function (c, i) {
+   731→   731→        var item = el('li', 'cause-item');
+   732→   732→        item.appendChild(el('span', 'cause-rank', faDigits(i + 1)));
+   733→   733→        item.appendChild(el('span', 'cause-text', esc((c && c.cause_fa) || '')));
+   734→   734→        if (c && c.evidence) item.appendChild(el('span', 'cause-evidence ltr-block', esc(c.evidence)));
+   735→   735→        cwrap.appendChild(item);
+   736→   736→      });
+   737→   737→      card.appendChild(cwrap);
+   738→   738→    }
+   739→   739→    li.appendChild(card);
+   740→   740→    timelineEl().appendChild(li);
+   741→   741→    scrollTimeline();
+   742→   742→  }
+   743→   743→
+   744→   744→  var TIER_BADGE_CLS = { auto: 'badge-emerald', approval: 'badge-amber', forbidden: 'badge-red' };
+   745→   745→
+   746→   746→  function tierBadge(rt) {
+   747→   747→    var cls = TIER_BADGE_CLS[rt.tier] || 'badge-zinc';
+   748→   748→    var fa = rt.tier_fa || rt.tier || '';
+   749→   749→    var b = el('span', 'badge ' + cls + ' tier-badge', esc(fa));
+   750→   750→    // append the numeric level only when the label does not already say it
+   751→   751→    if (rt.tier_level && fa.indexOf('سطح') === -1) {
+   752→   752→      b.appendChild(el('span', 'tier-level', 'سطح ' + faDigits(rt.tier_level)));
+   753→   753→    }
+   754→   754→    return b;
+   755→   755→  }
+   756→   756→
+   757→   757→  function rOps(p) {
+   758→   758→    var ok = !!p.ok;
+   759→   759→    var li = tlItem('tl-card', ok ? 'dot-emerald' : 'dot-red');
+   760→   760→    var card = el('div', 'card ops-card');
+   761→   761→    var head = el('div', 'risk-head');
+   762→   762→    head.appendChild(el('span', 'ops-title', 'عملیات: ' + esc(p.action || '')));
+   763→   763→    if (p.risk_tier && p.risk_tier.tier) head.appendChild(tierBadge(p.risk_tier));
+   764→   764→    card.appendChild(head);
+   765→   765→    card.appendChild(el('span', 'badge ' + (ok ? 'badge-emerald' : 'badge-red'), ok ? 'انجام شد' : 'ناموفق'));
+   766→   766→    if (p.message_fa) card.appendChild(el('span', 'ops-msg ltr-block', esc(p.message_fa)));
+   767→   767→    li.appendChild(card);
+   768→   768→    timelineEl().appendChild(li);
+   769→   769→    scrollTimeline();
+   770→   770→  }
+   771→   771→
+   772→   772→  function rOpsDenied(p) {
+   773→   773→    var li = tlItem('tl-card', 'dot-red');
+   774→   774→    var card = el('div', 'card ops-card ops-denied');
+   775→   775→    var head = el('div', 'risk-head');
+   776→   776→    head.appendChild(el('span', 'ops-title', 'اقدام رد شد: ' + esc(p.action || '')));
+   777→   777→    if (p.risk_tier && p.risk_tier.tier) head.appendChild(tierBadge(p.risk_tier));
+   778→   778→    card.appendChild(head);
+   779→   779→    card.appendChild(el('p', 'fix-reason', esc(p.reason_fa || 'این اقدام بدون تأیید اجرا نمی‌شود.')));
+   780→   780→    li.appendChild(card);
+   781→   781→    timelineEl().appendChild(li);
+   782→   782→    scrollTimeline();
+   783→   783→  }
+   784→   784→
+   785→   785→  function rMonitorAlert(p) {
+   786→   786→    var li = tlItem('tl-card', 'dot-red');
+   787→   787→    var card = el('div', 'card monitor-alert-card');
+   788→   788→    card.appendChild(el('div', 'fix-title', 'هشدار پایش'));
+   789→   789→    if (p.message_fa) card.appendChild(el('p', 'fix-reason', esc(p.message_fa)));
+   790→   790→    if (p.label) card.appendChild(el('span', 'badge badge-amber', esc(p.label)));
+   791→   791→    var sug = p.suggested_action;
+   792→   792→    if (sug && sug.tier) {
+   793→   793→      var row = el('div', 'monitor-row');
+   794→   794→      row.appendChild(el('span', 'muted small', 'اقدام پیشنهادی:'));
+   795→   795→      row.appendChild(el('span', 'ops-title', esc(sug.action)));
+   796→   796→      row.appendChild(tierBadge(sug));
+   797→   797→      card.appendChild(row);
+   798→   798→      card.appendChild(el('p', 'muted small', 'اجرای آن فقط با تأیید تو انجام می‌شود (ماتریس ریسک سطح ۲).'));
+   799→   799→    }
+   800→   800→    li.appendChild(card);
+   801→   801→    timelineEl().appendChild(li);
+   802→   802→    scrollTimeline();
+   803→   803→  }
+   804→   804→
+   805→   805→  function rVerify(p) {
+   806→   806→    setStep(6); // stepper: صحت‌سنجی
+   807→   807→    var ok = !!p.ok;
+   808→   808→    var li = tlItem('tl-card', ok ? 'dot-emerald' : 'dot-red');
+   809→   809→    var card = el('div', 'card verify-card ' + (ok ? 'verify-ok' : 'verify-fail'));
+   810→   810→    card.appendChild(el('div', 'verify-title', ok ? 'بررسی نهایی موفق' : 'بررسی نهایی ناموفق'));
+   811→   811→    if (p.status != null && p.status !== '') {
+   812→   812→      card.appendChild(el('span', 'badge ' + (ok ? 'badge-emerald' : 'badge-red'), 'HTTP ' + p.status));
+   813→   813→    }
+   814→   814→    if (p.url) {
+   815→   815→      var a = el('a', 'live-link ltr-block');
+   816→   816→      a.href = p.url;
+   817→   817→      a.target = '_blank';
+   818→   818→      a.rel = 'noopener';
+   819→   819→      a.textContent = p.url;
+   820→   820→      card.appendChild(a);
+   821→   821→    }
+   822→   822→    li.appendChild(card);
+   823→   823→    timelineEl().appendChild(li);
+   824→   824→    scrollTimeline();
+   825→   825→  }
+   826→   826→
+   827→   827→  function rReport(p) { store.report = p || {}; }
+   828→   828→
+   829→   829→  function rDone() {
+   830→   830→    stopSSE();
+   831→   831→    completeStepper(); // stepper: all stages done
+   832→   832→    disableInputs(true);
+   833→   833→    addNote('کار تمام شد.');
+   834→   834→    goReport();
+   835→   835→  }
+   836→   836→
+   837→   837→  function rError(p) {
+   838→   838→    errorStepper(); // stepper: rose error state on the active stage
+   839→   839→    var li = tlItem('tl-error', 'dot-red');
+   840→   840→    var card = el('div', 'card error-card');
+   841→   841→    card.appendChild(el('span', 'error-label', 'خطا'));
+   842→   842→    var msg = el('div', 'error-msg ltr-block');
+   843→   843→    msg.textContent = (p.message != null) ? String(p.message) : '';
+   844→   844→    card.appendChild(msg);
+   845→   845→    li.appendChild(card);
+   846→   846→    timelineEl().appendChild(li);
+   847→   847→    scrollTimeline();
+   848→   848→  }
+   849→   849→
+   850→   850→  function rCancelled() {
+   851→   851→    store.cancelled = true;
+   852→   852→    addNote('لغو شد');
+   853→   853→    disableInputs(true);
+   854→   854→  }
+   855→   855→
+   856→   856→  function rLevelChanged(p) {
+   857→   857→    var lvl = (p && p.level === 'expert') ? 'expert' : 'beginner';
+   858→   858→    store.level = lvl;
+   859→   859→    setLevelUI();
+   860→   860→    renderRiskBodies();
+   861→   861→  }
+   862→   862→
+   863→   863→  var ROUTES = {
+   864→   864→    stage: rStage,
+   865→   865→    log: rLog,
+   866→   866→    risk: rRisk,
+   867→   867→    plan: rPlan,
+   868→   868→    approval_required: rApproval,
+   869→   869→    deploy_log: rDeployLog,
+   870→   870→    fix: rFix,
+   871→   871→    verify: rVerify,
+   872→   872→    report: rReport,
+   873→   873→    done: rDone,
+   874→   874→    error: rError,
+   875→   875→    cancelled: rCancelled,
+   876→   876→    level_changed: rLevelChanged,
+   877→   877→    ops: rOps,
+   878→   878→    ops_denied: rOpsDenied,
+   879→   879→    monitor_alert: rMonitorAlert
+   880→   880→  };
+   881→   881→
+   882→   882→  /* ----------------------------------------------------------
+   883→   883→   * Presentational helpers (task 4-a) — no state, no behavior.
+   884→   884→   * 1) Pipeline stepper: maps server stage names onto the static
+   885→   885→   *    #stepper markup (done / active / error classes only).
+   886→   886→   * 2) Log-level tinting: purely cosmetic class on log lines.
+   887→   887→   * ---------------------------------------------------------- */
+   888→   888→
+   889→   889→  var STAGE_TO_STEP = {
+   890→   890→    assess: 0,
+   891→   891→    inspect: 1,
+   892→   892→    explain_risks: 2,
+   893→   893→    make_plan: 3,
+   894→   894→    prepare_files: 3,
+   895→   895→    deploy: 4,
+   896→   896→    read_logs: 5,
+   897→   897→    verify: 6,
+   898→   898→    teach_summary: 7,
+   899→   899→    escalate: 3
+   900→   900→  };
+   901→   901→
+   902→   902→  var stepperEl = null;
+   903→   903→  var stepEls = [];
+   904→   904→
+   905→   905→  function initStepper() {
+   906→   906→    stepperEl = $('#stepper');
+   907→   907→    if (!stepperEl) return;
+   908→   908→    stepEls = [];
+   909→   909→    var nodes = stepperEl.querySelectorAll('.step');
+   910→   910→    for (var i = 0; i < nodes.length; i++) stepEls.push(nodes[i]);
+   911→   911→  }
+   912→   912→
+   913→   913→  function setStep(idx) {
+   914→   914→    if (!stepEls.length) return;
+   915→   915→    for (var i = 0; i < stepEls.length; i++) {
+   916→   916→      var li = stepEls[i];
+   917→   917→      li.classList.toggle('done', i < idx);
+   918→   918→      li.classList.toggle('active', i === idx);
+   919→   919→      li.classList.remove('error');
+   920→   920→      if (i === idx) li.setAttribute('aria-current', 'step');
+   921→   921→      else li.removeAttribute('aria-current');
+   922→   922→    }
+   923→   923→    if (stepperEl) stepperEl.classList.remove('complete');
+   924→   924→  }
+   925→   925→
+   926→   926→  function syncStepper(stageName) {
+   927→   927→    if (stageName == null) return;
+   928→   928→    var idx = STAGE_TO_STEP[String(stageName)];
+   929→   929→    if (idx != null) setStep(idx);
+   930→   930→  }
+   931→   931→
+   932→   932→  function completeStepper() {
+   933→   933→    if (!stepEls.length) return;
+   934→   934→    for (var i = 0; i < stepEls.length; i++) {
+   935→   935→      stepEls[i].classList.remove('active', 'error');
+   936→   936→      stepEls[i].classList.add('done');
+   937→   937→      stepEls[i].removeAttribute('aria-current');
+   938→   938→    }
+   939→   939→    if (stepperEl) stepperEl.classList.add('complete');
+   940→   940→  }
+   941→   941→
+   942→   942→  function errorStepper() {
+   943→   943→    if (!stepEls.length) return;
+   944→   944→    for (var i = 0; i < stepEls.length; i++) {
+   945→   945→      if (stepEls[i].classList.contains('active')) stepEls[i].classList.add('error');
+   946→   946→    }
+   947→   947→  }
+   948→   948→
+   949→   949→  function logLevelCls(text) {
+   950→   950→    var t = String(text == null ? '' : text).toLowerCase();
+   951→   951→    if (/error|fail|fatal|exception|traceback|refused|denied|crash|✗|✘/.test(t)) return ' log-err';
+   952→   952→    if (/warn|deprecat|fallback|retry|unverified|skip|not found|not verified|escalat/.test(t)) return ' log-warn';
+   953→   953→    if (/(^|\W)(ok|success|passed|healthy|live|done)(\W|$)|✓|200 ok/.test(t)) return ' log-ok';
+   954→   954→    return '';
+   955→   955→  }
+   956→   956→
+   957→   957→  /* ----------------------------------------------------------
+   958→   958→   * Run screen controls: level toggle + cancel
+   959→   959→   * ---------------------------------------------------------- */
+   960→   960→
+   961→   961→  function setLevelUI() {
+   962→   962→    $('#lvl-beginner').setAttribute('aria-pressed', String(store.level === 'beginner'));
+   963→   963→    $('#lvl-expert').setAttribute('aria-pressed', String(store.level === 'expert'));
+   964→   964→  }
+   965→   965→
+   966→   966→  function onToggleLevel(lvl) {
+   967→   967→    if (store.level === lvl || store.cancelled) return;
+   968→   968→    var prev = store.level;
+   969→   969→    store.level = lvl;           // optimistic
+   970→   970→    setLevelUI();
+   971→   971→    renderRiskBodies();
+   972→   972→    api.level(store.sessionId, { level: lvl }).then(function (res) {
+   973→   973→      // sync from server response if it echoes the level
+   974→   974→      if (res && (res.level === 'beginner' || res.level === 'expert') && res.level !== store.level) {
+   975→   975→        store.level = res.level;
+   976→   976→        setLevelUI();
+   977→   977→        renderRiskBodies();
+   978→   978→      }
+   979→   979→    }).catch(function (e) {
+   980→   980→      if (isExpired(e)) return;
+   981→   981→      store.level = prev;        // revert on failure
+   982→   982→      setLevelUI();
+   983→   983→      renderRiskBodies();
+   984→   984→      addNote('تغییر سطح توضیح اعمال نشد.');
+   985→   985→    });
+   986→   986→  }
+   987→   987→
+   988→   988→  function onCancel() {
+   989→   989→    if (store.cancelled) return;
+   990→   990→    var btn = $('#btn-cancel');
+   991→   991→    btn.disabled = true;
+   992→   992→    btn.textContent = 'در حال لغو…';
+   993→   993→    api.cancel(store.sessionId).then(function () {
+   994→   994→      addNote('درخواست لغو ثبت شد؛ در حال توقف…');
+   995→   995→    }).catch(function (e) {
+   996→   996→      if (isExpired(e)) return;
+   997→   997→      btn.disabled = false;
+   998→   998→      btn.textContent = 'لغو عملیات';
+   999→   999→      addNote('لغو عملیات ناموفق بود؛ دوباره تلاش کن.');
+  1000→  1000→    });
+  1001→  1001→  }
+  1002→  1002→
+  1003→  1003→  /** Mid-run Q&A (T15): free question -> ONE llm call on the server -> Q/A pair
+  1004→  1004→   *  rendered in the timeline (client-side only; answers never enter SSE events). */
+  1005→  1005→  function bindAsk() {
+  1006→  1006→    var form = $('#ask-form');
+  1007→  1007→    if (!form || form.dataset.bound) return;
+  1008→  1008→    form.dataset.bound = '1';
+  1009→  1009→    form.addEventListener('submit', function (ev) {
+  1010→  1010→      ev.preventDefault();
+  1011→  1011→      var input = $('#ask-input');
+  1012→  1012→      var btn = $('#btn-ask');
+  1013→  1013→      var q = String(input.value || '').trim();
+  1014→  1014→      if (!q || !store.sessionId) return;
+  1015→  1015→      btn.disabled = true;
+  1016→  1016→      input.disabled = true;
+  1017→  1017→      btn.textContent = 'در حال پاسخ…';
+  1018→  1018→      addQA(q, null); // question first, answer appended on arrival
+  1019→  1019→      api.ask(store.sessionId, { question: q }).then(function (res) {
+  1020→  1020→        addQA(null, (res && res.answer_fa) ? res.answer_fa : '—');
+  1021→  1021→        input.value = '';
+  1022→  1022→      }).catch(function (e) {
+  1023→  1023→        if (!isExpired(e)) addQA(null, 'پاسخ گرفتن ناموفق بود؛ دوباره تلاش کن.');
+  1024→  1024→      }).finally(function () {
+  1025→  1025→        btn.disabled = false;
+  1026→  1026→        input.disabled = false;
+  1027→  1027→        btn.textContent = 'پرسیدن';
+  1028→  1028→        input.focus();
+  1029→  1029→      });
+  1030→  1030→    });
+  1031→  1031→  }
+  1032→  1032→
+  1033→  1033→  function addQA(question, answer) {
+  1034→  1034→    var tl = timelineEl();
+  1035→  1035→    if (!tl) return;
+  1036→  1036→    var li = el('li', 'tl-item tl-note');
+  1037→  1037→    if (question != null) {
+  1038→  1038→      var q = el('div', 'ask-q', '<span class="ask-badge">تو</span>');
+  1039→  1039→      var qText = document.createElement('span');
+  1040→  1040→      qText.textContent = question; // textContent: user input is never HTML
+  1041→  1041→      q.appendChild(qText);
+  1042→  1042→      li.appendChild(q);
+  1043→  1043→      li.dataset.pending = '1';
+  1044→  1044→      tl.appendChild(li);
+  1045→  1045→      tl.scrollTop = tl.scrollHeight;
+  1046→  1046→      return;
+  1047→  1047→    }
+  1048→  1048→    // answer: attach to the newest pending question, else standalone
+  1049→  1049→    var last = tl.querySelector('li[data-pending="1"]');
+  1050→  1050→    var target = last || li;
+  1051→  1051→    if (last) delete last.dataset.pending;
+  1052→  1052→    var a = el('div', 'ask-a', '<span class="ask-badge ask-badge-agent">خلبان</span>');
+  1053→  1053→    var aText = document.createElement('span');
+  1054→  1054→    aText.textContent = answer || '';
+  1055→  1055→    a.appendChild(aText);
+  1056→  1056→    target.appendChild(a);
+  1057→  1057→    tl.scrollTop = tl.scrollHeight;
+  1058→  1058→  }
+  1059→  1059→
+  1060→  1060→  /* ----------------------------------------------------------
+  1061→  1061→   * Approval modal
+  1062→  1062→   * ---------------------------------------------------------- */
+  1063→  1063→
+  1064→  1064→  function normalizeEnv(env) {
+  1065→  1065→    if (!env) return [];
+  1066→  1066→    var arr = Array.isArray(env)
+  1067→  1067→      ? env
+  1068→  1068→      : Object.keys(env).map(function (k) { return { key: k, value: env[k] }; });
+  1069→  1069→    return arr.map(function (it) {
+  1070→  1070→      if (typeof it === 'string') return { key: it, value: '' };
+  1071→  1071→      var key = it.key || it.name || it.env || it.id || '';
+  1072→  1072→      var value = (it.value != null) ? it.value
+  1073→  1073→        : (it.default != null) ? it.default
+  1074→  1074→        : (it.example != null) ? it.example : '';
+  1075→  1075→      return { key: String(key), value: String(value) };
+  1076→  1076→    }).filter(function (x) { return x.key; });
+  1077→  1077→  }
+  1078→  1078→
+  1079→  1079→  function envRowsBlock(env) {
+  1080→  1080→    var wrap = el('div', 'env-table');
+  1081→  1081→    normalizeEnv(env).forEach(function (it, i) {
+  1082→  1082→      var row = el('div', 'env-row');
+  1083→  1083→      var label = el('label', 'env-key ltr-block');
+  1084→  1084→      label.setAttribute('for', 'env-in-' + i);
+  1085→  1085→      label.textContent = it.key;
+  1086→  1086→      var input = el('input', 'env-input');
+  1087→  1087→      input.type = 'text';
+  1088→  1088→      input.id = 'env-in-' + i;
+  1089→  1089→      input.dir = 'ltr';
+  1090→  1090→      input.value = it.value;
+  1091→  1091→      input.dataset.key = it.key;
+  1092→  1092→      input.autocomplete = 'off';
+  1093→  1093→      input.spellcheck = false;
+  1094→  1094→      row.appendChild(label);
+  1095→  1095→      row.appendChild(input);
+  1096→  1096→      wrap.appendChild(row);
+  1097→  1097→    });
+  1098→  1098→    return wrap;
+  1099→  1099→  }
+  1100→  1100→
+  1101→  1101→  function preparedFilesBlock(files) {
+  1102→  1102→    var wrap = el('div', 'files-list');
+  1103→  1103→    (files || []).forEach(function (f, idx) {
+  1104→  1104→      var d = el('details', 'file-item');
+  1105→  1105→      var name = (f && f.name) ? f.name : 'file-' + (idx + 1);
+  1106→  1106→      d.appendChild(el('summary', 'file-name ltr-block', esc(name)));
+  1107→  1107→      var pre = el('pre', 'file-content ltr-block');
+  1108→  1108→      pre.textContent = (f && f.content != null) ? String(f.content) : '';
+  1109→  1109→      d.appendChild(pre);
+  1110→  1110→      wrap.appendChild(d);
+  1111→  1111→    });
+  1112→  1112→    return wrap;
+  1113→  1113→  }
+  1114→  1114→
+  1115→  1115→  function openApprovalModal(p) {
+  1116→  1116→    p = p || {};
+  1117→  1117→    store.pendingApproval = p;
+  1118→  1118→    var modal = $('#modal');
+  1119→  1119→    modal.innerHTML = '';
+  1120→  1120→    modal.classList.remove('is-approval', 'is-question', 'is-ops');
+  1121→  1121→
+  1122→  1122→    var isQuestion = p.kind === 'question';
+  1123→  1123→    modal.classList.add(isQuestion ? 'is-question' : 'is-approval');
+  1124→  1124→
+  1125→  1125→    var title = el('h3', 'modal-title', isQuestion ? 'خلبان یک سؤال دارد' : 'نیاز به تأیید تو');
+  1126→  1126→    title.id = 'modal-title';
+  1127→  1127→    modal.appendChild(title);
+  1128→  1128→    modal.appendChild(el('p', 'muted modal-sub',
+  1129→  1129→      isQuestion ? 'خلبان از روی لاگ‌ها به چیزی نیاز دارد که فقط تو می‌توانی بدهی.'
+  1130→  1130→                 : 'خلبان پیش از هر کار هزینه‌دار، اجازهٔ تو را می‌گیرد.'));
+  1131→  1131→
+  1132→  1132→    if (isQuestion) {
+  1133→  1133→      modal.appendChild(el('p', 'question-text', String(p.question_fa || '')));
+  1134→  1134→      var reply = el('input', 'env-input');
+  1135→  1135→      reply.type = 'text';
+  1136→  1136→      reply.id = 'ask-reply';
+  1137→  1137→      reply.placeholder = 'پاسخ‌ات را همین‌جا بنویس…';
+  1138→  1138→      modal.appendChild(reply);
+  1139→  1139→
+  1140→  1140→      var errBoxQ = el('div', 'error-box');
+  1141→  1141→      errBoxQ.hidden = true;
+  1142→  1142→      errBoxQ.setAttribute('role', 'alert');
+  1143→  1143→      modal.appendChild(errBoxQ);
+  1144→  1144→
+  1145→  1145→      var actionsQ = el('div', 'modal-actions');
+  1146→  1146→      var sendBtn = el('button', 'btn btn-primary', 'ارسال پاسخ');
+  1147→  1147→      sendBtn.type = 'button';
+  1148→  1148→      sendBtn.id = 'btn-approve';
+  1149→  1149→      var skipBtn = el('button', 'btn btn-ghost', 'بدون پاسخ');
+  1150→  1150→      skipBtn.type = 'button';
+  1151→  1151→      skipBtn.id = 'btn-reject';
+  1152→  1152→      actionsQ.appendChild(sendBtn);
+  1153→  1153→      actionsQ.appendChild(skipBtn);
+  1154→  1154→      modal.appendChild(actionsQ);
+  1155→  1155→
+  1156→  1156→      sendBtn.addEventListener('click', function () {
+  1157→  1157→        sendReply(String(reply.value || ''), sendBtn, skipBtn, errBoxQ);
+  1158→  1158→      });
+  1159→  1159→      skipBtn.addEventListener('click', function () {
+  1160→  1160→        sendReply('', skipBtn, sendBtn, errBoxQ);
+  1161→  1161→      });
+  1162→  1162→
+  1163→  1163→      $('#modal-overlay').hidden = false;
+  1164→  1164→      reply.focus();
+  1165→  1165→      return;
+  1166→  1166→    }
+  1167→  1167→
+  1168→  1168→    var costRow = el('div', 'cost-row');
+  1169→  1169→    costRow.appendChild(el('span', 'cost-label', 'هزینهٔ تخمینی:'));
+  1170→  1170→    costRow.appendChild(el('span', 'cost-val ltr-block', esc(p.estimated_cost != null ? p.estimated_cost : '—')));
+  1171→  1171→    if (p.cost_unverified) costRow.appendChild(el('span', 'badge badge-amber', UNVERIFIED_BADGE));
+  1172→  1172→    modal.appendChild(costRow);
+  1173→  1173→
+  1174→  1174→    var envItems = normalizeEnv(p.env_needed);
+  1175→  1175→    if (envItems.length) {
+  1176→  1176→      modal.appendChild(el('h4', 'modal-sec-title', 'متغیرهای محیطی'));
+  1177→  1177→      modal.appendChild(el('p', 'muted small', 'مقادیر را وارد کن؛ خلبان آن‌ها را فقط برای همین استقرار استفاده می‌کند.'));
+  1178→  1178→      modal.appendChild(envRowsBlock(p.env_needed));
+  1179→  1179→    }
+  1180→  1180→
+  1181→  1181→    if (Array.isArray(p.prepared_files) && p.prepared_files.length) {
+  1182→  1182→      modal.appendChild(el('h4', 'modal-sec-title', 'فایل‌های آماده‌شده'));
+  1183→  1183→      modal.appendChild(preparedFilesBlock(p.prepared_files));
+  1184→  1184→    }
+  1185→  1185→
+  1186→  1186→    var errBox = el('div', 'error-box');
+  1187→  1187→    errBox.hidden = true;
+  1188→  1188→    errBox.setAttribute('role', 'alert');
+  1189→  1189→    modal.appendChild(errBox);
+  1190→  1190→
+  1191→  1191→    var actions = el('div', 'modal-actions');
+  1192→  1192→    var okBtn = el('button', 'btn btn-primary', 'تأیید و استقرار');
+  1193→  1193→    okBtn.type = 'button';
+  1194→  1194→    okBtn.id = 'btn-approve';
+  1195→  1195→    var noBtn = el('button', 'btn btn-ghost', 'لغو');
+  1196→  1196→    noBtn.type = 'button';
+  1197→  1197→    noBtn.id = 'btn-reject';
+  1198→  1198→    actions.appendChild(okBtn);
+  1199→  1199→    actions.appendChild(noBtn);
+  1200→  1200→    modal.appendChild(actions);
+  1201→  1201→
+  1202→  1202→    okBtn.addEventListener('click', function () { sendApproval(true, okBtn, noBtn, errBox); });
+  1203→  1203→    noBtn.addEventListener('click', function () { sendApproval(false, okBtn, noBtn, errBox); });
+  1204→  1204→
+  1205→  1205→    $('#modal-overlay').hidden = false;
+  1206→  1206→    okBtn.focus();
+  1207→  1207→  }
+  1208→  1208→
+  1209→  1209→  /** Answer an ask_user interrupt (T14): a free-text reply for the agent. */
+  1210→  1210→  function sendReply(text, okBtn, noBtn, errBox) {
+  1211→  1211→    errBox.hidden = true;
+  1212→  1212→    okBtn.disabled = true;
+  1213→  1213→    noBtn.disabled = true;
+  1214→  1214→    okBtn.textContent = 'در حال ارسال پاسخ…';
+  1215→  1215→    var replied = store.pendingApproval; // the question this reply answers
+  1216→  1216→    api.approve(store.sessionId, { approved: true, user_reply: text }).then(function () {
+  1217→  1217→      // The server may resume the graph before this POST resolves; if the NEXT
+  1218→  1218→      // interrupt already re-opened the modal, keep it instead of closing it.
+  1219→  1219→      if (!store.pendingApproval || store.pendingApproval === replied) closeModal();
+  1220→  1220→      addNote('پاسخ تو به خلبان رسید؛ ادامه‌ی اصلاح…');
+  1221→  1221→    }).catch(function (err) {
+  1222→  1222→      okBtn.disabled = false;
+  1223→  1223→      noBtn.disabled = false;
+  1224→  1224→      okBtn.textContent = 'ارسال پاسخ';
+  1225→  1225→      errBox.hidden = false;
+  1226→  1226→      errBox.textContent = (err && err.message) ? err.message : 'ارسال پاسخ ناموفق بود.';
+  1227→  1227→    });
+  1228→  1228→  }
+  1229→  1229→
+  1230→  1230→  function collectEnvValues() {
+  1231→  1231→    var out = {};
+  1232→  1232→    var inputs = $('#modal').querySelectorAll('.env-input');
+  1233→  1233→    for (var i = 0; i < inputs.length; i++) {
+  1234→  1234→      out[inputs[i].dataset.key] = inputs[i].value.trim();
+  1235→  1235→    }
+  1236→  1236→    return out;
+  1237→  1237→  }
+  1238→  1238→
+  1239→  1239→  function sendApproval(approved, okBtn, noBtn, errBox) {
+  1240→  1240→    errBox.hidden = true;
+  1241→  1241→    okBtn.disabled = true;
+  1242→  1242→    noBtn.disabled = true;
+  1243→  1243→    if (approved) okBtn.textContent = 'در حال ارسال تأیید…';
+  1244→  1244→
+  1245→  1245→    var body = approved
+  1246→  1246→      ? { approved: true, cost_ok: true, env_values: collectEnvValues() }
+  1247→  1247→      : { approved: false };
+  1248→  1248→    api.approve(store.sessionId, body).then(function () {
+  1249→  1249→      closeModal();
+  1250→  1250→      if (approved) {
+  1251→  1251→        addNote('تأیید دریافت شد؛ استقرار آغاز شد.');
+  1252→  1252→      } else {
+  1253→  1253→        store.cancelled = true;
+  1254→  1254→        disableInputs(true);
+  1255→  1255→        addNote('درخواست استقرار لغو شد.');
+  1256→  1256→      }
+  1257→  1257→    }).catch(function (e) {
+  1258→  1258→      if (isExpired(e)) return;
+  1259→  1259→      errBox.innerHTML = '';
+  1260→  1260→      errBox.appendChild(document.createTextNode('ارسال پاسخ ناموفق بود. دوباره تلاش کن.'));
+  1261→  1261→      if (e.detail) errBox.appendChild(el('span', 'ltr-block', esc(e.detail)));
+  1262→  1262→      errBox.hidden = false;
+  1263→  1263→      okBtn.disabled = false;
+  1264→  1264→      noBtn.disabled = false;
+  1265→  1265→      okBtn.textContent = 'تأیید و استقرار';
+  1266→  1266→    });
+  1267→  1267→  }
+  1268→  1268→
+  1269→  1269→  function closeModal() {
+  1270→  1270→    $('#modal-overlay').hidden = true;
+  1271→  1271→    $('#modal').innerHTML = '';
+  1272→  1272→    $('#modal').classList.remove('is-approval', 'is-question', 'is-ops');
+  1273→  1273→    store.pendingApproval = null;
+  1274→  1274→  }
+  1275→  1275→
+  1276→  1276→  /** Minimal focus trap so Tab cannot escape the approval dialog. */
+  1277→  1277→  function wireModalTrap() {
+  1278→  1278→    $('#modal-overlay').addEventListener('keydown', function (ev) {
+  1279→  1279→      if (ev.key !== 'Tab') return;
+  1280→  1280→      var focusables = $('#modal').querySelectorAll('button, input, summary, a[href]');
+  1281→  1281→      if (!focusables.length) return;
+  1282→  1282→      var first = focusables[0];
+  1283→  1283→      var last = focusables[focusables.length - 1];
+  1284→  1284→      if (ev.shiftKey && document.activeElement === first) {
+  1285→  1285→        ev.preventDefault();
+  1286→  1286→        last.focus();
+  1287→  1287→      } else if (!ev.shiftKey && document.activeElement === last) {
+  1288→  1288→        ev.preventDefault();
+  1289→  1289→        first.focus();
+  1290→  1290→      }
+  1291→  1291→    });
+  1292→  1292→  }
+  1293→  1293→
+  1294→  1294→  /* ----------------------------------------------------------
+  1295→  1295→   * D) Report screen
+  1296→  1296→   * ---------------------------------------------------------- */
+  1297→  1297→
+  1298→  1298→  function goReport() {
+  1299→  1299→    stopSSE();
+  1300→  1300→    disableInputs(true);
+  1301→  1301→    showScreen('report');
+  1302→  1302→    renderReport();
+  1303→  1303→    if (store.report && (store.report.url || store.report.live_url)) startMonitorPolling();
+  1304→  1304→  }
+  1305→  1305→
+  1306→  1306→  /* ----------------------------------------------------------
+  1307→  1307→   * Continuous monitoring panel (T6) — poll /monitor on the report screen.
+  1308→  1308→   * Source labels: liara_api values stay UNVERIFIED-badged until a live read
+  1309→  1309→   * confirms units; inference is always labelled «استنتاج».
+  1310→  1310→   * ---------------------------------------------------------- */
+  1311→  1311→
+  1312→  1312→  function startMonitorPolling() {
+  1313→  1313→    if (store.monitorTimer) return;
+  1314→  1314→    renderMonitor(); // immediate first paint
+  1315→  1315→    store.monitorTimer = setInterval(renderMonitor, 15000);
+  1316→  1316→  }
+  1317→  1317→
+  1318→  1318→  function monitorSourceBadge(sample) {
+  1319→  1319→    if (sample.source === 'liara_api') return el('span', 'badge badge-amber monitor-src', UNVERIFIED_BADGE);
+  1320→  1320→    return el('span', 'badge badge-zinc monitor-src', 'استنتاج');
+  1321→  1321→  }
+  1322→  1322→
+  1323→  1323→  function renderMonitor() {
+  1324→  1324→    var box = $('#monitor-box');
+  1325→  1325→    if (!box || !store.sessionId) return;
+  1326→  1326→    api.monitor(store.sessionId).then(function (data) {
+  1327→  1327→      box.innerHTML = '';
+  1328→  1328→      var s = (data && data.sample) || {};
+  1329→  1329→      var alerting = !!(data && data.alerting);
+  1330→  1330→
+  1331→  1331→      if (alerting) {
+  1332→  1332→        var alert = el('div', 'monitor-alert', 'هشدار: سلامت برنامه افت کرده است. پیشنهاد خلبان: ری‌استارت (سطح ۲ — با تأیید تو).');
+  1333→  1333→        var ab = el('button', 'btn btn-ghost ops-btn', 'ری‌استارت برنامه');
+  1334→  1334→        ab.type = 'button';
+  1335→  1335→        ab.addEventListener('click', function () { openOpsApprovalModal('restart'); });
+  1336→  1336→        alert.appendChild(ab);
+  1337→  1337→        box.appendChild(alert);
+  1338→  1338→      }
+  1339→  1339→
+  1340→  1340→      var row = el('div', 'monitor-row');
+  1341→  1341→      var ok = (s.healthy !== undefined) ? !!s.healthy : (s.probe && s.probe.ok);
+  1342→  1342→      row.appendChild(el('span', 'badge ' + (ok ? 'badge-emerald' : 'badge-red'), ok ? 'سالم' : 'ناسالم'));
+  1343→  1343→      row.appendChild(monitorSourceBadge(s));
+  1344→  1344→      if (s.probe && s.probe.response_ms != null) {
+  1345→  1345→        row.appendChild(el('span', 'muted small', 'زمان پاسخ: ' + faDigits(s.probe.response_ms) + ' میلی‌ثانیه'));
+  1346→  1346→      }
+  1347→  1347→      if (s.plan_id) {
+  1348→  1348→        row.appendChild(el('span', 'muted small', 'پلن زنده: '));
+  1349→  1349→        row.appendChild(el('span', 'ltr-block', esc(s.plan_id)));
+  1350→  1350→      }
+  1351→  1351→      if (s.source === 'liara_api' && s.metrics) {
+  1352→  1352→        row.appendChild(el('span', 'muted small', 'متریک از API لیارا (مقیاس مقادیر UNVERIFIED)'));
+  1353→  1353→      }
+  1354→  1354→      box.appendChild(row);
+  1355→  1355→
+  1356→  1356→      var hist = (data && data.history) || [];
+  1357→  1357→      if (hist.length) {
+  1358→  1358→        var ul = el('ul', 'monitor-history');
+  1359→  1359→        hist.forEach(function (h, idx) {
+  1360→  1360→          var li = el('li', (h.healthy ? '' : 'bad') + (idx < hist.length - 12 ? ' old' : ''));
+  1361→  1361→          li.title = (h.healthy ? 'سالم' : 'ناسالم') + ' — ' + new Date((h.ts || 0) * 1000).toLocaleTimeString('fa-IR');
+  1362→  1362→          ul.appendChild(li);
+  1363→  1363→        });
+  1364→  1364→        box.appendChild(ul);
+  1365→  1365→      }
+  1366→  1366→    }).catch(function (e) {
+  1367→  1367→      if (isExpired(e)) { stopMonitorPolling(); }
+  1368→  1368→    });
+  1369→  1369→  }
+  1370→  1370→
+  1371→  1371→  function stopMonitorPolling() {
+  1372→  1372→    if (store.monitorTimer) { clearInterval(store.monitorTimer); store.monitorTimer = null; }
+  1373→  1373→  }
+  1374→  1374→
+  1375→  1375→  function reportStatus(r) {
+  1376→  1376→    if (store.cancelled) return { label: 'لغو شد', cls: 'st-off' };
+  1377→  1377→    var s = String(r.status || '').toLowerCase();
+  1378→  1378→    if (/decision|approval|await|need|confirm/.test(s)) return { label: 'نیاز به تصمیم تو', cls: 'st-warn' };
+  1379→  1379→    if (/cancel|abort|stop/.test(s)) return { label: 'لغو شد', cls: 'st-off' };
+  1380→  1380→    if (/success|done|deployed|live|complete|finish|ok/.test(s)) return { label: 'موفق', cls: 'st-ok' };
+  1381→  1381→    var url = r.url || r.live_url || (r.deployment && r.deployment.url);
+  1382→  1382→    if (url) return { label: 'موفق', cls: 'st-ok' };
+  1383→  1383→    if (!r.status) return { label: 'نیاز به تصمیم تو', cls: 'st-warn' };
+  1384→  1384→    return { label: 'نیاز به تصمیم تو', cls: 'st-warn' };
+  1385→  1385→  }
+  1386→  1386→
+  1387→  1387→  function sectionCard(title) {
+  1388→  1388→    var sec = el('section', 'card report-sec');
+  1389→  1389→    sec.appendChild(el('h4', 'sec-title', esc(title)));
+  1390→  1390→    return sec;
+  1391→  1391→  }
+  1392→  1392→
+  1393→  1393→  function checklist(items) {
+  1394→  1394→    var ul = el('ul', 'checklist');
+  1395→  1395→    items.forEach(function (t) {
+  1396→  1396→      var text = (typeof t === 'string') ? t : ((t && (t.text || t.title || t.detail)) || '');
+  1397→  1397→      ul.appendChild(el('li', '', esc(text)));
+  1398→  1398→    });
+  1399→  1399→    return ul;
+  1400→  1400→  }
+  1401→  1401→
+  1402→  1402→  /* Post-deploy operations section (T4) — the three-tier legend + gated buttons. */
+  1403→  1403→  function opsSection() {
+  1404→  1404→    var sec = sectionCard('عملیات بعد از استقرار');
+  1405→  1405→    var legend = el('div', 'chip-wrap risk-legend');
+  1406→  1406→    legend.appendChild(tierBadge({ tier: 'auto', tier_fa: 'خودکار — فقط خواندنی', tier_level: 1 }));
+  1407→  1407→    legend.appendChild(tierBadge({ tier: 'approval', tier_fa: 'نیازمند تأیید تو', tier_level: 2 }));
+  1408→  1408→    legend.appendChild(tierBadge({ tier: 'forbidden', tier_fa: 'فقط دستی — ایجنت هرگز اجرا نمی‌کند', tier_level: 3 }));
+  1409→  1409→    sec.appendChild(legend);
+  1410→  1410→    sec.appendChild(el('p', 'muted small',
+  1411→  1411→      'خواندن وضعیت/لاگ/مصرف خودکار است؛ ری‌استارت و تغییر پلن فقط با تأیید تو؛ حذف اپ یا دیسک هرگز توسط خلبان انجام نمی‌شود.'));
+  1412→  1412→    var row = el('div', 'ops-actions');
+  1413→  1413→    var btnRestart = el('button', 'btn btn-ghost ops-btn', 'ری‌استارت برنامه');
+  1414→  1414→    btnRestart.type = 'button';
+  1415→  1415→    btnRestart.id = 'btn-ops-restart';
+  1416→  1416→    btnRestart.appendChild(tierBadge({ tier: 'approval', tier_fa: 'سطح ۲', tier_level: 2 }));
+  1417→  1417→    btnRestart.addEventListener('click', function () { openOpsApprovalModal('restart'); });
+  1418→  1418→    row.appendChild(btnRestart);
+  1419→  1419→    sec.appendChild(row);
+  1420→  1420→    var mwrap = el('div', 'monitor-box');
+  1421→  1421→    mwrap.id = 'monitor-box';
+  1422→  1422→    sec.appendChild(mwrap);
+  1423→  1423→    return sec;
+  1424→  1424→  }
+  1425→  1425→
+  1426→  1426→  /** Tier-2 approval modal for a post-deploy operation (restart for now). */
+  1427→  1427→  function openOpsApprovalModal(action) {
+  1428→  1428→    var modal = $('#modal');
+  1429→  1429→    modal.innerHTML = '';
+  1430→  1430→    modal.classList.remove('is-approval', 'is-question', 'is-ops');
+  1431→  1431→    modal.classList.add('is-ops');
+  1432→  1432→    var title = el('h3', 'modal-title', 'اقدام سطح ۲ — نیازمند تأیید تو');
+  1433→  1433→    title.id = 'modal-title';
+  1434→  1434→    modal.appendChild(title);
+  1435→  1435→    var text = (action === 'restart')
+  1436→  1436→      ? 'ری‌استارت برنامه باعث قطع موقت سرویس می‌شود و بعد از آن برنامه دوباره بالا می‌آید. ادامه می‌دهی؟'
+  1437→  1437→      : 'این اقدام سطح ۲ است و فقط با تأیید تو اجرا می‌شود. ادامه می‌دهی؟';
+  1438→  1438→    modal.appendChild(el('p', 'modal-sub', text));
+  1439→  1439→    var errBox = el('div', 'error-box');
+  1440→  1440→    errBox.hidden = true;
+  1441→  1441→    errBox.setAttribute('role', 'alert');
+  1442→  1442→    modal.appendChild(errBox);
+  1443→  1443→    var actions = el('div', 'modal-actions');
+  1444→  1444→    var okBtn = el('button', 'btn btn-primary', 'تأیید و اجرا');
+  1445→  1445→    okBtn.type = 'button';
+  1446→  1446→    var noBtn = el('button', 'btn btn-ghost', 'لغو');
+  1447→  1447→    noBtn.type = 'button';
+  1448→  1448→    actions.appendChild(okBtn);
+  1449→  1449→    actions.appendChild(noBtn);
+  1450→  1450→    modal.appendChild(actions);
+  1451→  1451→    okBtn.addEventListener('click', function () {
+  1452→  1452→      errBox.hidden = true;
+  1453→  1453→      okBtn.disabled = true; noBtn.disabled = true;
+  1454→  1454→      okBtn.textContent = 'در حال اجرا…';
+  1455→  1455→      api.ops(store.sessionId, { action: action, approved: true }).then(function (res) {
+  1456→  1456→        closeModal();
+  1457→  1457→        // The report screen has no live timeline — show the result in the ops panel.
+  1458→  1458→        var box = $('#monitor-box');
+  1459→  1459→        var text = (action === 'restart' ? 'ری‌استارت: ' : 'عملیات: ')
+  1460→  1460→          + ((res && (res.message_fa || res.message)) ? (res.message_fa || res.message) : 'ثبت شد.');
+  1461→  1461→        if (box) {
+  1462→  1462→          box.innerHTML = '';
+  1463→  1463→          var note = el('div', 'monitor-row ops-result');
+  1464→  1464→          note.appendChild(el('span', 'badge badge-emerald', 'انجام شد'));
+  1465→  1465→          note.appendChild(el('span', 'ltr-block', esc(text)));
+  1466→  1466→          box.appendChild(note);
+  1467→  1467→        } else {
+  1468→  1468→          addNote(text);
+  1469→  1469→        }
+  1470→  1470→      }).catch(function (e) {
+  1471→  1471→        okBtn.disabled = false; noBtn.disabled = false;
+  1472→  1472→        okBtn.textContent = 'تأیید و اجرا';
+  1473→  1473→        errBox.hidden = false;
+  1474→  1474→        errBox.textContent = (e && e.detail === 'approval_required')
+  1475→  1475→          ? 'بدون تأیید صریح اجرا نمی‌شود.'
+  1476→  1476→          : 'اجرای اقدام ناموفق بود. دوباره تلاش کن.';
+  1477→  1477→      });
+  1478→  1478→    });
+  1479→  1479→    noBtn.addEventListener('click', function () { closeModal(); });
+  1480→  1480→    $('#modal-overlay').hidden = false;
+  1481→  1481→    okBtn.focus();
+  1482→  1482→  }
+  1483→  1483→
+  1484→  1484→  function renderReport() {
+  1485→  1485→    var root = $('#report-root');
+  1486→  1486→    root.innerHTML = '';
+  1487→  1487→    var r = store.report || {};
+  1488→  1488→
+  1489→  1489→    if (!store.report) {
+  1490→  1490→      root.appendChild(el('p', 'muted', 'گزارشی برای نمایش ثبت نشد.'));
+  1491→  1491→      return;
+  1492→  1492→    }
+  1493→  1493→
+  1494→  1494→    // Status header
+  1495→  1495→    var st = reportStatus(r);
+  1496→  1496→    var banner = el('div', 'report-status ' + st.cls);
+  1497→  1497→    banner.appendChild(el('span', 'status-label', st.label));
+  1498→  1498→    root.appendChild(banner);
+  1499→  1499→
+  1500→  1500→    // Live URL
+  1501→  1501→    var url = r.url || r.live_url || (r.deployment && r.deployment.url);
+  1502→  1502→    if (url) {
+  1503→  1503→      var secUrl = sectionCard('آدرس زنده');
+  1504→  1504→      var box = el('div', 'url-box');
+  1505→  1505→      var a = el('a', 'live-link ltr-block');
+  1506→  1506→      a.href = url;
+  1507→  1507→      a.target = '_blank';
+  1508→  1508→      a.rel = 'noopener';
+  1509→  1509→      a.textContent = url;
+  1510→  1510→      box.appendChild(a);
+  1511→  1511→      secUrl.appendChild(box);
+  1512→  1512→      root.appendChild(secUrl);
+  1513→  1513→
+  1514→  1514→      // Post-deploy operations (T4): each action shows its risk tier.
+  1515→  1515→      root.appendChild(opsSection());
+  1516→  1516→    }
+  1517→  1517→
+  1518→  1518→    // Steps taken
+  1519→  1519→    var rawSteps = r.steps || r.steps_taken || [];
+  1520→  1520→    var steps = rawSteps.map(function (s) {
+  1521→  1521→      if (typeof s === 'string') return { title: s, detail: '' };
+  1522→  1522→      return {
+  1523→  1523→        title: (s && (s.title_fa || s.title || s.name)) || '',
+  1524→  1524→        detail: (s && (s.detail || s.detail_fa || s.text)) || ''
+  1525→  1525→      };
+  1526→  1526→    }).filter(function (x) { return x.title || x.detail; });
+  1527→  1527→    if (steps.length) {
+  1528→  1528→      var secSteps = sectionCard('مرحله‌های انجام‌شده');
+  1529→  1529→      var ol = el('ol', 'steps-list');
+  1530→  1530→      steps.forEach(function (s) {
+  1531→  1531→        var li = el('li', 'step-item');
+  1532→  1532→        li.appendChild(el('span', 'step-title', esc(s.title)));
+  1533→  1533→        if (s.detail) li.appendChild(el('span', 'step-detail', esc(s.detail)));
+  1534→  1534→        ol.appendChild(li);
+  1535→  1535→      });
+  1536→  1536→      secSteps.appendChild(ol);
+  1537→  1537→      root.appendChild(secSteps);
+  1538→  1538→    }
+  1539→  1539→
+  1540→  1540→    // Risks summary chips
+  1541→  1541→    var rawRisks = r.risks || [];
+  1542→  1542→    if (rawRisks.length) {
+  1543→  1543→      var secRisks = sectionCard('ریسک‌های شناسایی‌شده');
+  1544→  1544→      var wrap = el('div', 'chip-wrap');
+  1545→  1545→      rawRisks.forEach(function (x) {
+  1546→  1546→        var item = (typeof x === 'string')
+  1547→  1547→          ? { sev: null, text: x }
+  1548→  1548→          : {
+  1549→  1549→              sev: x && x.severity,
+  1550→  1550→              text: (x && (x.evidence_file || x.beginner_text || x.detail || x.id)) || ''
+  1551→  1551→            };
+  1552→  1552→        var sev = SEV[item.sev];
+  1553→  1553→        var chip = el('span', 'risk-chip');
+  1554→  1554→        if (sev) chip.appendChild(el('span', 'sev-dot ' + sev.dotCls));
+  1555→  1555→        chip.appendChild(el('span', 'ltr-block', esc(item.text)));
+  1556→  1556→        wrap.appendChild(chip);
+  1557→  1557→      });
+  1558→  1558→      secRisks.appendChild(wrap);
+  1559→  1559→      root.appendChild(secRisks);
+  1560→  1560→    }
+  1561→  1561→
+  1562→  1562→    // Decisions (audit)
+  1563→  1563→    var rawDecisions = r.decisions || r.audit || [];
+  1564→  1564→    if (rawDecisions.length) {
+  1565→  1565→      var secDec = sectionCard('تصمیم‌ها (حسابرسی)');
+  1566→  1566→      var ul = el('ul', 'decisions-list');
+  1567→  1567→      rawDecisions.forEach(function (d) {
+  1568→  1568→        var text = (typeof d === 'string')
+  1569→  1569→          ? d
+  1570→  1570→          : ((d && (d.action || d.detail || d.summary || d.text || d.title_fa)) || JSON.stringify(d));
+  1571→  1571→        ul.appendChild(el('li', 'decision-item ltr-block', esc(text)));
+  1572→  1572→      });
+  1573→  1573→      secDec.appendChild(ul);
+  1574→  1574→      root.appendChild(secDec);
+  1575→  1575→    }
+  1576→  1576→
+  1577→  1577→    // Cost
+  1578→  1578→    var cost = (r.estimated_cost != null) ? r.estimated_cost
+  1579→  1579→      : (r.cost != null) ? r.cost
+  1580→  1580→      : (r.cost_estimate != null) ? r.cost_estimate : null;
+  1581→  1581→    if (cost != null || r.cost_unverified) {
+  1582→  1582→      var secCost = sectionCard('هزینه');
+  1583→  1583→      var costRow = el('div', 'cost-row');
+  1584→  1584→      costRow.appendChild(el('span', 'cost-label', 'هزینهٔ تخمینی:'));
+  1585→  1585→      costRow.appendChild(el('span', 'cost-val ltr-block', esc(cost != null ? cost : '—')));
+  1586→  1586→      if (r.cost_unverified) costRow.appendChild(el('span', 'badge badge-amber', UNVERIFIED_BADGE));
+  1587→  1587→      secCost.appendChild(costRow);
+  1588→  1588→      root.appendChild(secCost);
+  1589→  1589→    }
+  1590→  1590→
+  1591→  1591→    // Beginner "what you learned" checklist (emerald card)
+  1592→  1592→    if (Array.isArray(r.learned) && r.learned.length) {
+  1593→  1593→      var secLearn = el('section', 'card report-sec learned-card');
+  1594→  1594→      secLearn.appendChild(el('h4', 'sec-title learned-title', 'چه چیزهایی یاد گرفتی'));
+  1595→  1595→      secLearn.appendChild(checklist(r.learned));
+  1596→  1596→      root.appendChild(secLearn);
+  1597→  1597→    }
+  1598→  1598→
+  1599→  1599→    // "Next time" checklist card
+  1600→  1600→    if (Array.isArray(r.next_time) && r.next_time.length) {
+  1601→  1601→      var secNext = el('section', 'card report-sec next-card');
+  1602→  1602→      secNext.appendChild(el('h4', 'sec-title', 'برای دفع بعد'));
+  1603→  1603→      secNext.appendChild(checklist(r.next_time));
+  1604→  1604→      root.appendChild(secNext);
+  1605→  1605→    }
+  1606→  1606→  }
+  1607→  1607→
+  1608→  1608→  /* ----------------------------------------------------------
+  1609→  1609→   * Bootstrap
+  1610→  1610→   * ---------------------------------------------------------- */
+  1611→  1611→
+  1612→  1612→  function init() {
+  1613→  1613→    wireUpload();
+  1614→  1614→    wireModalTrap();
+  1615→  1615→    initStepper();
+  1616→  1616→
+  1617→  1617→    $('#btn-expert-skip').addEventListener('click', function () { submitAnswers(true); });
+  1618→  1618→    $('#btn-start').addEventListener('click', function () { submitAnswers(false); });
+  1619→  1619→    $('#btn-cancel').addEventListener('click', onCancel);
+  1620→  1620→    $('#lvl-beginner').addEventListener('click', function () { onToggleLevel('beginner'); });
+  1621→  1621→    $('#lvl-expert').addEventListener('click', function () { onToggleLevel('expert'); });
+  1622→  1622→    $('#btn-new').addEventListener('click', function () { location.reload(); });
+  1623→  1623→    $('#btn-restart').addEventListener('click', function () { location.reload(); });
+  1624→  1624→
+  1625→  1625→    updateDemoBadge();
+  1626→  1626→    showScreen('upload');
+  1627→  1627→  }
+  1628→  1628→
+  1629→  1629→  if (document.readyState === 'loading') {
+  1630→  1630→    document.addEventListener('DOMContentLoaded', init);
+  1631→  1631→  } else {
+  1632→  1632→    init();
+  1633→  1633→  }
+  1634→  1634→})();
+  1635→  1635→
