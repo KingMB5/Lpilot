@@ -12,9 +12,14 @@ Deploy sequence (one deploy() call):
   1. GET  /v1/projects/{name}              -> app exists? else create (needs planID)
   2. GET  /v1/projects/{id}/disks          -> create missing disks (paid: post-approval only)
   3. POST /v1/projects/update-envs         -> env VALUES go here, nowhere else
-  4. POST /v2/projects/{name}/sources      -> zip of the project (secrets excluded)
-  5. poll GET /v1/projects/{name}          -> status until ok/bad or timeout
-  6. url = https://{name}.liara.run        -> UNVERIFIED format (flagged)
+  4. POST /v2/projects/{name}/sources      -> zip of the project (secrets excluded) -> sourceID
+  5. POST /v2/projects/{name}/releases     -> {sourceID, port, type} -> releaseID (VERIFIED
+     live 2026-10-22 via the official CLI: this is what actually starts the build)
+  6. poll GET /v2/releases/{id}/build-logs -> release.state machine (READY | FAILED |
+     UNHEALTHY | TIMEDOUT | CANCELED) + REAL build output lines (paged by createdAt)
+  7. url = https://{name}.liara.run        -> VERIFIED for apps WITH a network
+     (iran region without network uses {name}.iran.liara.run); the verify step's
+     live URL check remains the final arbiter
 
 Live-API additions verified 2026-10-22 (docs/VERIFIED_MATRIX.md):
 - Team context: every request carries ?teamID=<LIARA_TEAM_ID> when the env var
@@ -48,6 +53,11 @@ from app.config import load_defaults
 from deployers.sources import ZIP_NAME, build_source_zip, describe_zip
 
 RETRY_STATUSES = {429, 500, 502, 503, 504}
+
+# Release state machine — VERIFIED live 2026-10-22 via the official CLI
+# (src/services/build-logs.ts) + real API calls; NOT in paas.yaml.
+RELEASE_OK = {"READY"}
+RELEASE_BAD = {"FAILED", "UNHEALTHY", "TIMEDOUT", "CANCELED"}
 
 # UNVERIFIED app status strings (spec does not enumerate them) — best-effort sets.
 STATUS_OK = {"running", "ok", "ready", "started", "active", "online", "healthy"}
@@ -95,6 +105,7 @@ class LiaraApiDeployer:
         self._logs: list[str] = []
         self._url: str | None = None
         self._app_name: str | None = None
+        self._last_source_id: str = ""
 
     # ------------------------------------------------------------ HTTP core
 
@@ -165,7 +176,10 @@ class LiaraApiDeployer:
                 return err
             if (err := self._upload_sources(app, config)) is not None:
                 return err
-            return self._await_running(app)
+            release_id, err = self._create_release(app, config)
+            if err is not None:
+                return err
+            return self._await_release(release_id)
         except httpx.TimeoutException:
             return {"ok": False, "kind": "timeout", "message": "request timeout after retries",
                     "logs": list(self._logs)}
@@ -387,65 +401,77 @@ class LiaraApiDeployer:
                              files={"file": (ZIP_NAME, data, "application/zip")})
         if resp.status_code == 200:
             body = resp.json() if isinstance(resp.json(), dict) else {}
-            self._log(f"source accepted: sourceID={body.get('sourceID', '?')}")
+            self._last_source_id = str(body.get("sourceID", ""))
+            self._log(f"source accepted: sourceID={self._last_source_id or '?'}")
             return None
         return self._http_fail(resp, "upload sources")
 
-    def _await_running(self, app: str) -> dict:
-        """Poll GET /v1/projects/{name} until the app is REALLY up or timeout.
-        VERIFIED live 2026-10-22: status flips to ACTIVE immediately on create
-        while the build is still running and isDeployed stays false — so status
-        alone is not enough. Rule: wait for status OK AND isDeployed not False
-        (when the field is present). The verify step's live URL check remains
-        the final arbiter either way."""
+    def _create_release(self, app: str, config: dict) -> tuple[str, dict | None]:
+        """VERIFIED live 2026-10-22 (official CLI src/commands/deploy.ts): the
+        sources upload does NOT deploy anything by itself — a RELEASE must be
+        created (POST /v2/projects/{name}/releases {sourceID, port, type, build}).
+        This is the step that actually starts the build."""
+        body = {"sourceID": self._last_source_id,
+                "port": config.get("port"),
+                "type": config.get("platform") or "node",
+                "build": {"cache": True}}
+        self._log(f"create release: port={body['port']} type={body['type']}")
+        resp = self._request("POST", f"/v2/projects/{app}/releases", json_body=body)
+        if resp.status_code in (200, 201):
+            rid = str((resp.json() or {}).get("releaseID", ""))
+            if rid:
+                self._log(f"release created: {rid[:12]}…")
+                return rid, None
+            return "", {"ok": False, "kind": "unknown",
+                        "message": "release response lacks releaseID", "logs": list(self._logs)}
+        return "", self._http_fail(resp, "create release")
+
+    def _await_release(self, release_id: str) -> dict:
+        """Poll GET /v2/releases/{id}/build-logs until the release state machine
+        resolves. VERIFIED live 2026-10-22 via the official CLI
+        (src/services/build-logs.ts): buildOutput lines are the REAL build log
+        (paged by createdAt as `since`); release.state is the verdict:
+        READY | FAILED | UNHEALTHY | TIMEDOUT | CANCELED. STDERR lines and
+        failReason land in our logs so the self-fix loop diagnoses from truth."""
         deadline = time.monotonic() + self.poll_timeout_s
-        last_status = ""
-        last_deployed: bool | None = None
+        since = ""
+        last_state = ""
+        fail_reason = ""
         while time.monotonic() < deadline:
-            resp = self._request("GET", f"/v1/projects/{app}")
+            resp = self._request("GET", f"/v2/releases/{release_id}/build-logs",
+                                 params={"since": since} if since else None)
             if resp.status_code == 200:
-                proj = (resp.json() or {}).get("project") or {}
-                last_status = str(proj.get("status", "")).lower()
-                if "isDeployed" in proj:
-                    last_deployed = bool(proj.get("isDeployed"))
-                if last_status in STATUS_OK and last_deployed is not False:
+                body = resp.json() if isinstance(resp.json(), dict) else {}
+                release = body.get("release") or {}
+                last_state = str(release.get("state") or last_state)
+                fail_reason = str(release.get("failReason") or fail_reason)
+                for out in body.get("buildOutput") or []:
+                    stream = str(out.get("stream", "")).upper()
+                    line = str(out.get("line", "")).rstrip()
+                    if line:
+                        self._log(f"build {stream.lower()}: {line[:200]}")
+                    if out.get("createdAt"):
+                        since = str(out["createdAt"])
+                if last_state in RELEASE_OK:
                     break
-                if last_status in STATUS_BAD:
-                    self._log(f"app status: {last_status} — fetching logs")
-                    return {"ok": False, "kind": "build_failed",
-                            "message": f"app status: {last_status}", "logs": self.logs()}
+                if last_state in RELEASE_BAD:
+                    msg = f"release {last_state}" + (f": {fail_reason}" if fail_reason else "")
+                    self._log(msg)
+                    return {"ok": False, "kind": "build_failed", "message": msg,
+                            "logs": self.logs()}
             else:
-                self._log(f"poll -> http {resp.status_code}")
+                self._log(f"build-logs -> http {resp.status_code}")
             self._sleep(self.poll_interval_s)
         else:
-            note = f", isDeployed={last_deployed}" if last_deployed is not None else ""
             return {"ok": False, "kind": "build_failed",
-                    "message": f"deploy timeout ({self.poll_timeout_s}s), last status: {last_status or '?'}{note}",
+                    "message": f"build timeout ({self.poll_timeout_s}s), last state: {last_state or '?'}",
                     "logs": self.logs()}
-        if last_deployed is False:
-            # status OK but Liara says not deployed yet — one more bounded grace
-            # window so slow builds are not misreported, then arbitrate via URL.
-            grace = min(self.poll_timeout_s, 180.0)
-            g_deadline = time.monotonic() + grace
-            while time.monotonic() < g_deadline:
-                self._sleep(self.poll_interval_s)
-                resp = self._request("GET", f"/v1/projects/{app}")
-                if resp.status_code == 200:
-                    proj = (resp.json() or {}).get("project") or {}
-                    if "isDeployed" in proj and bool(proj.get("isDeployed")):
-                        last_deployed = True
-                        break
-                    st = str(proj.get("status", "")).lower()
-                    if st in STATUS_BAD:
-                        self._log(f"app status: {st} — fetching logs")
-                        return {"ok": False, "kind": "build_failed",
-                                "message": f"app status: {st}", "logs": self.logs()}
-            if last_deployed is False:
-                self._log(f"status '{last_status}' but isDeployed=false after {grace:.0f}s grace — "
-                          "continuing; the verify step's live URL check will arbitrate")
-        # UNVERIFIED URL format — flagged in logs; verify step does a real HTTP check.
-        self._url = f"https://{app}.liara.run"
-        self._log(f"deploy finished. url: {self._url} (format UNVERIFIED — verify step will confirm)")
+        # URL format VERIFIED (CLI src/commands/deploy.ts): apps WITH a network
+        # get {app}.liara.run; iran-region apps WITHOUT one use .iran.liara.run.
+        # Our created apps always carry a network; the verify step's live URL
+        # check remains the final arbiter.
+        self._url = f"https://{self._app_name}.liara.run"
+        self._log(f"deploy finished. url: {self._url}")
         return {"ok": True, "kind": "success", "message": "deployed", "url": self._url,
                 "logs": list(self._logs)}
 

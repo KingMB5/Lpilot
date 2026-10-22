@@ -81,7 +81,6 @@ def _zip_from_multipart(body: bytes) -> bytes:
 def test_success_flow_creates_app_disk_envs_and_uploads(tmp_path):
     get_app = respx.get(f"{BASE}/v1/projects/my-app").mock(side_effect=[
         httpx.Response(404),   # ensure_app: does not exist
-        httpx.Response(200, json={"project": {"project_id": "my-app", "status": "running"}}),  # poll
     ])
     create = respx.post(f"{BASE}/v1/projects").mock(return_value=httpx.Response(200))
     # network auto-discovery (VERIFIED live 2026-10-22: creation needs a network id)
@@ -94,17 +93,32 @@ def test_success_flow_creates_app_disk_envs_and_uploads(tmp_path):
         return_value=httpx.Response(200, json={"message": "ok"}))
     upload = respx.post(f"{BASE}/v2/projects/my-app/sources").mock(
         return_value=httpx.Response(200, json={"sourceID": "src-1"}))
+    # release flow (VERIFIED live 2026-10-22: sources upload alone deploys nothing)
+    release = respx.post(f"{BASE}/v2/projects/my-app/releases").mock(
+        return_value=httpx.Response(200, json={"releaseID": "rel-1"}))
+    build_logs = respx.get(f"{BASE}/v2/releases/rel-1/build-logs").mock(side_effect=[
+        httpx.Response(200, json={"release": {"state": "BUILDING"},
+                                  "buildOutput": [{"stream": "STDOUT", "line": "npm install",
+                                                   "createdAt": "2026-10-22T20:00:00Z"}]}),
+        httpx.Response(200, json={"release": {"state": "READY"}, "buildOutput": []}),
+    ])
 
     res = deployer().deploy(_cfg(tmp_project(), disks=[{"name": "database", "mountTo": "db"}]))
 
     assert res["ok"] is True and res["kind"] == "success"
     assert res["url"] == "https://my-app.liara.run"
-    assert get_app.call_count == 2  # 404 then running
+    assert get_app.call_count == 1  # existence check only — release drives the rest
+    assert release.call_count == 1
+    rel_body = json.loads(release.calls.last.request.content)
+    assert rel_body["sourceID"] == "src-1" and rel_body["port"] == 3000
+    assert build_logs.call_count == 2  # BUILDING -> READY
     # create body matches the VERIFIED schema (+ live 2026-10-22 additions:
     # bundlePlanID tier name + network id, auto-discovered here)
     create_body = json.loads(create.calls.last.request.content)
     assert create_body == {"name": "my-app", "planID": PLAN, "platform": "node",
                            "bundlePlanID": "basic", "network": "net-123"}
+    # build-logs pagination uses the last line's createdAt as `since` (CLI contract)
+    assert str(build_logs.calls.last.request.url.params.get("since")) == "2026-10-22T20:00:00Z"
     # disk body: NUMBER of GB (VERIFIED live 2026-10-22 — "1G" is rejected)
     assert json.loads(disk.calls.last.request.content) == {"name": "database", "size": 1}
     # env VALUES go to update-envs and nowhere else
@@ -121,9 +135,13 @@ def test_success_flow_creates_app_disk_envs_and_uploads(tmp_path):
 @respx.mock
 def test_existing_app_skips_create():
     get_app = respx.get(f"{BASE}/v1/projects/existing").mock(return_value=httpx.Response(
-        200, json={"project": {"project_id": "existing", "status": "running"}}))
+        200, json={"project": {"project_id": "existing", "status": "ACTIVE", "isDeployed": True}}))
     respx.post(f"{BASE}/v2/projects/existing/sources").mock(
         return_value=httpx.Response(200, json={"sourceID": "s"}))
+    respx.post(f"{BASE}/v2/projects/existing/releases").mock(
+        return_value=httpx.Response(200, json={"releaseID": "rel-x"}))
+    respx.get(f"{BASE}/v2/releases/rel-x/build-logs").mock(
+        return_value=httpx.Response(200, json={"release": {"state": "READY"}, "buildOutput": []}))
     create = respx.post(f"{BASE}/v1/projects").mock(return_value=httpx.Response(200))
 
     res = deployer().deploy({"app_name": "existing", "platform": "node", "port": 3000,
@@ -131,7 +149,7 @@ def test_existing_app_skips_create():
                              "disks": [], "project_dir": tmp_project()})
     assert res["ok"] is True and res["kind"] == "success"
     assert create.call_count == 0  # app existed — never re-created
-    assert get_app.call_count == 2  # existence check + one status poll
+    assert get_app.call_count == 1  # existence check only
 
 
 # ---------------------------------------------------------------- team context (VERIFIED live 2026-10-22)
@@ -141,15 +159,21 @@ def test_team_id_travels_as_query_param_on_every_request():
     """The official CLI sets teamID on every URL (setGotConfig hook); our
     deployer mirrors that with LIARA_TEAM_ID / team_id=."""
     get_app = respx.get(f"{BASE}/v1/projects/my-app").mock(
-        return_value=httpx.Response(200, json={"project": {"project_id": "my-app", "status": "running"}}))
+        return_value=httpx.Response(200, json={"project": {"project_id": "my-app", "status": "ACTIVE", "isDeployed": True}}))
     respx.post(f"{BASE}/v2/projects/my-app/sources").mock(
         return_value=httpx.Response(200, json={"sourceID": "s"}))
+    release = respx.post(f"{BASE}/v2/projects/my-app/releases").mock(
+        return_value=httpx.Response(200, json={"releaseID": "rel-1"}))
+    respx.get(f"{BASE}/v2/releases/rel-1/build-logs").mock(
+        return_value=httpx.Response(200, json={"release": {"state": "READY"}, "buildOutput": []}))
     res = deployer(team_id="team-42").deploy({"app_name": "my-app", "platform": "node", "port": 3000,
                                               "env": {}, "required_env": [], "prepared_files": [],
                                               "disks": [], "project_dir": tmp_project()})
     assert res["ok"] is True
-    assert get_app.call_count >= 1
+    assert get_app.call_count >= 1 and release.call_count == 1
     for call in get_app.calls:  # EVERY request carried the team param
+        assert call.request.url.params["teamID"] == "team-42"
+    for call in release.calls:
         assert call.request.url.params["teamID"] == "team-42"
 
 
@@ -168,14 +192,16 @@ def test_missing_network_blocks_create_with_clear_error():
 
 @respx.mock
 def test_explicit_network_id_skips_discovery():
-    get_app = respx.get(f"{BASE}/v1/projects/my-app").mock(side_effect=[
-        httpx.Response(404),   # ensure_app: does not exist
-        httpx.Response(200, json={"project": {"project_id": "my-app", "status": "running"}}),  # poll
-    ])
+    get_app = respx.get(f"{BASE}/v1/projects/my-app").mock(
+        return_value=httpx.Response(404))
     discovery = respx.get(f"{BASE}/v1/networks").mock(return_value=httpx.Response(200, json={"networks": []}))
     create = respx.post(f"{BASE}/v1/projects").mock(return_value=httpx.Response(200))
     respx.post(f"{BASE}/v2/projects/my-app/sources").mock(
         return_value=httpx.Response(200, json={"sourceID": "s"}))
+    respx.post(f"{BASE}/v2/projects/my-app/releases").mock(
+        return_value=httpx.Response(200, json={"releaseID": "rel-1"}))
+    respx.get(f"{BASE}/v2/releases/rel-1/build-logs").mock(
+        return_value=httpx.Response(200, json={"release": {"state": "READY"}, "buildOutput": []}))
     res = deployer(network_id="net-explicit").deploy(
         {"app_name": "my-app", "platform": "node", "port": 3000, "env": {}, "required_env": [],
          "prepared_files": [], "disks": [], "project_dir": tmp_project()})
@@ -225,10 +251,12 @@ def test_429_retried_with_backoff_then_success():
         httpx.Response(429), httpx.Response(429), httpx.Response(200, json={"message": "ok"})])
     respx.post(f"{BASE}/v2/projects/my-app/sources").mock(
         return_value=httpx.Response(200, json={"sourceID": "s"}))
-    respx.get(f"{BASE}/v1/projects/my-app").mock(side_effect=[
-        httpx.Response(200, json={"project": {"status": "running"}}),   # ensure
-        httpx.Response(200, json={"project": {"status": "running"}}),   # poll
-    ])
+    respx.get(f"{BASE}/v1/projects/my-app").mock(
+        return_value=httpx.Response(200, json={"project": {"status": "ACTIVE", "isDeployed": True}}))
+    respx.post(f"{BASE}/v2/projects/my-app/releases").mock(
+        return_value=httpx.Response(200, json={"releaseID": "rel-1"}))
+    respx.get(f"{BASE}/v2/releases/rel-1/build-logs").mock(
+        return_value=httpx.Response(200, json={"release": {"state": "READY"}, "buildOutput": []}))
 
     res = deployer().deploy(_cfg(tmp_project()))
     assert res["ok"] is True
@@ -264,18 +292,26 @@ def test_timeout_maps_to_timeout_kind():
 
 @respx.mock
 def test_build_failed_status_returns_logs_for_fix_loop():
+    """The verdict comes from the release state machine; both the app's /logs
+    endpoint and the release buildOutput land in the fix loop's evidence."""
     respx.post(f"{BASE}/v2/projects/my-app/sources").mock(
         return_value=httpx.Response(200, json={"sourceID": "s"}))
     respx.get(f"{BASE}/v1/projects/my-app").mock(return_value=httpx.Response(
-        200, json={"project": {"status": "failed"}}))
+        200, json={"project": {"status": "ACTIVE", "isDeployed": True}}))
     respx.post(f"{BASE}/v1/projects/update-envs").mock(
         return_value=httpx.Response(200, json={"message": "ok"}))
+    respx.post(f"{BASE}/v2/projects/my-app/releases").mock(
+        return_value=httpx.Response(200, json={"releaseID": "rel-f"}))
     respx.get(f"{BASE}/v1/projects/my-app/logs").mock(return_value=httpx.Response(
         200, json=[{"type": "error", "datetime": "2026-10-20", "message": "npm ERR! missing script"}]))
+    respx.get(f"{BASE}/v2/releases/rel-f/build-logs").mock(
+        return_value=httpx.Response(200, json={"release": {"state": "FAILED", "failReason": "exit 1"},
+                                               "buildOutput": []}))
 
     res = deployer().deploy(_cfg(tmp_project()))
     assert res["ok"] is False and res["kind"] == "build_failed"
     assert any("npm ERR!" in line for line in res["logs"])
+    assert "FAILED" in res["message"]
 
 
 # ---------------------------------------------------------------- dry run
@@ -357,26 +393,73 @@ def test_factory_selects_by_env(monkeypatch):
     monkeypatch.setenv("DEMO_MODE", "1")      # demo always wins -> offline
     assert make_deployer().name == "mock"
 
-# ---------------------------------------------------------------- real deploy wait (VERIFIED live 2026-10-22)
+# ---------------------------------------------------------------- release state machine (VERIFIED live 2026-10-22)
 
 @respx.mock
-def test_await_running_waits_for_isdeployed_not_just_active_status(tmp_path):
-    """VERIFIED live: status flips ACTIVE on create while the build runs and
-    isDeployed stays false — the poller must NOT report success then."""
-    get_app = respx.get(f"{BASE}/v1/projects/my-app").mock(side_effect=[
-        httpx.Response(404),  # ensure_app: does not exist
-        httpx.Response(200, json={"project": {"status": "ACTIVE", "isDeployed": False}}),  # building
-        httpx.Response(200, json={"project": {"status": "ACTIVE", "isDeployed": False}}),  # still building
-        httpx.Response(200, json={"project": {"status": "ACTIVE", "isDeployed": True}}),   # really up
-    ])
-    respx.get(f"{BASE}/v1/networks").mock(return_value=httpx.Response(200, json={
-        "networks": [{"_id": "net-1", "name": "n"}]}))
-    respx.post(f"{BASE}/v1/projects").mock(return_value=httpx.Response(200))
+def test_release_failure_surfaces_real_build_logs(tmp_path):
+    """VERIFIED live: GET /v2/releases/{id}/build-logs carries the REAL build
+    output — failure lines must land in deploy logs for the self-fix loop."""
+    respx.get(f"{BASE}/v1/projects/my-app").mock(
+        return_value=httpx.Response(200, json={"project": {"status": "ACTIVE", "isDeployed": True}}))
     respx.post(f"{BASE}/v2/projects/my-app/sources").mock(
         return_value=httpx.Response(200, json={"sourceID": "s"}))
+    respx.post(f"{BASE}/v2/projects/my-app/releases").mock(
+        return_value=httpx.Response(200, json={"releaseID": "rel-bad"}))
+    respx.get(f"{BASE}/v1/projects/my-app/logs").mock(
+        return_value=httpx.Response(200, json=[]))
+    respx.get(f"{BASE}/v2/releases/rel-bad/build-logs").mock(side_effect=[
+        httpx.Response(200, json={"release": {"state": "BUILDING"},
+                                  "buildOutput": [{"stream": "STDOUT", "line": "npm ERR! missing",
+                                                   "createdAt": "2026-10-22T20:01:00Z"}]}),
+        httpx.Response(200, json={"release": {"state": "FAILED", "failReason": "build exited 1"},
+                                  "buildOutput": [{"stream": "STDERR",
+                                                   "line": "Error: Cannot find module '/app/missing-entry.js'",
+                                                   "createdAt": "2026-10-22T20:02:00Z"}]}),
+    ])
 
+    d = deployer()
+    res = d.deploy({"app_name": "my-app", "platform": "node", "port": 3000,
+                    "env": {}, "required_env": [], "prepared_files": [],
+                    "disks": [], "project_dir": tmp_project()})
+    assert res["ok"] is False and res["kind"] == "build_failed"
+    assert "FAILED" in res["message"] and "build exited 1" in res["message"]
+    blob = "\n".join(res["logs"])
+    assert "Cannot find module" in blob      # real evidence for the diagnose node
+    assert "npm ERR! missing" in blob
+
+
+@respx.mock
+def test_release_unhealthy_reports_failure(tmp_path):
+    respx.get(f"{BASE}/v1/projects/my-app").mock(
+        return_value=httpx.Response(200, json={"project": {"status": "ACTIVE", "isDeployed": True}}))
+    respx.post(f"{BASE}/v2/projects/my-app/sources").mock(
+        return_value=httpx.Response(200, json={"sourceID": "s"}))
+    respx.post(f"{BASE}/v2/projects/my-app/releases").mock(
+        return_value=httpx.Response(200, json={"releaseID": "rel-u"}))
+    respx.get(f"{BASE}/v1/projects/my-app/logs").mock(
+        return_value=httpx.Response(200, json=[]))
+    respx.get(f"{BASE}/v2/releases/rel-u/build-logs").mock(
+        return_value=httpx.Response(200, json={"release": {"state": "UNHEALTHY"},
+                                               "buildOutput": [{"stream": "STDERR",
+                                                                "line": "container health check failed"}]}))
     res = deployer().deploy({"app_name": "my-app", "platform": "node", "port": 3000,
                              "env": {}, "required_env": [], "prepared_files": [],
                              "disks": [], "project_dir": tmp_project()})
-    assert res["ok"] is True and res["url"] == "https://my-app.liara.run"
-    assert get_app.call_count == 4  # 404 + two building polls + deployed poll
+    assert res["ok"] is False and res["kind"] == "build_failed"
+    assert "UNHEALTHY" in res["message"]
+
+
+@respx.mock
+def test_missing_release_id_is_deterministic_failure(tmp_path):
+    respx.get(f"{BASE}/v1/projects/my-app").mock(
+        return_value=httpx.Response(200, json={"project": {"status": "ACTIVE", "isDeployed": True}}))
+    respx.post(f"{BASE}/v2/projects/my-app/sources").mock(
+        return_value=httpx.Response(200, json={"sourceID": "s"}))
+    respx.post(f"{BASE}/v2/projects/my-app/releases").mock(
+        return_value=httpx.Response(200, json={}))
+    res = deployer().deploy({"app_name": "my-app", "platform": "node", "port": 3000,
+                             "env": {}, "required_env": [], "prepared_files": [],
+                             "disks": [], "project_dir": tmp_project()})
+    assert res["ok"] is False and "releaseID" in res["message"]
+
+
