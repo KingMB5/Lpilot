@@ -111,6 +111,9 @@ def test_success_flow_creates_app_disk_envs_and_uploads(tmp_path):
     assert release.call_count == 1
     rel_body = json.loads(release.calls.last.request.content)
     assert rel_body["sourceID"] == "src-1" and rel_body["port"] == 3000
+    # VERIFIED live shape: typed collections + non-empty message, no gitInfo
+    assert rel_body["cron"] == [] and rel_body["envs"] == {} and rel_body["platformConfig"] == {}
+    assert rel_body["message"] and "gitInfo" not in rel_body
     assert build_logs.call_count == 2  # BUILDING -> READY
     # create body matches the VERIFIED schema (+ live 2026-10-22 additions:
     # bundlePlanID tier name + network id, auto-discovered here)

@@ -50,7 +50,7 @@ from typing import Any, Callable
 import httpx
 
 from app.config import load_defaults
-from deployers.sources import ZIP_NAME, build_source_zip, describe_zip
+from deployers.sources import ARCHIVE_NAME, build_source_zip, describe_zip
 
 RETRY_STATUSES = {429, 500, 502, 503, 504}
 
@@ -399,8 +399,12 @@ class LiaraApiDeployer:
         self._log(f"upload sources: {meta['filename']} entries={meta['entries']} "
                   f"bytes={meta['bytes']} liara_json={meta['has_liara_json']}")
         # VERIFIED multipart field "file" (binary); -> 200 {sourceID}.
+        # VERIFIED live 2026-10-22: the content-type/filename drive how the
+        # builder extracts — application/gzip + .tar.gz is the working pair
+        # (application/zip got the tar stored as *.zip and the build failed
+        # extraction every time).
         resp = self._request("POST", f"/v2/projects/{app}/sources",
-                             files={"file": (ZIP_NAME, data, "application/zip")})
+                             files={"file": (ARCHIVE_NAME, data, "application/gzip")})
         if resp.status_code == 200:
             body = resp.json() if isinstance(resp.json(), dict) else {}
             self._last_source_id = str(body.get("sourceID", ""))
@@ -413,10 +417,17 @@ class LiaraApiDeployer:
         sources upload does NOT deploy anything by itself — a RELEASE must be
         created (POST /v2/projects/{name}/releases {sourceID, port, type, build}).
         This is the step that actually starts the build."""
+        # VERIFIED live 2026-10-22 (validation errors + a 201 READY build): the
+        # release body needs the FULL typed shape — message non-empty, cron/args
+        # arrays, envs/platformConfig objects, build.cache; gitInfo must be
+        # omitted (null is rejected). App envs travel via update-envs, so the
+        # release carries an empty envs map.
         body = {"sourceID": self._last_source_id,
                 "port": config.get("port"),
                 "type": config.get("platform") or "node",
-                "build": {"cache": True}}
+                "message": "deployed by LiaraPilot",
+                "build": {"cache": True},
+                "cron": [], "args": [], "disks": [], "envs": {}, "platformConfig": {}}
         self._log(f"create release: port={body['port']} type={body['type']}")
         resp = self._request("POST", f"/v2/projects/{app}/releases", json_body=body)
         if resp.status_code in (200, 201):
@@ -523,7 +534,7 @@ class LiaraApiDeployer:
         prepared = config.get("prepared_files") or []
         reqs.append({"op": "upload_sources", "method": "POST",
                      "path": f"/v2/projects/{app}/sources",
-                     "multipart": {"file": ZIP_NAME},
+                     "multipart": {"file": ARCHIVE_NAME},
                      "prepared_files": [str(f.get("name")) for f in prepared]})
         reqs.append({"op": "poll_status", "method": "GET", "path": f"/v1/projects/{app}",
                      "note": f"poll every {self.poll_interval_s}s up to {self.poll_timeout_s}s"})
