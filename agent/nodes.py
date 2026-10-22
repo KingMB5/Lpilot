@@ -214,6 +214,14 @@ def fix(state: dict, deps: Deps) -> dict:
         if not validate_params(diagnosis["action"], diagnosis.get("params") or {}, state)[0]:
             diagnosis = {"diagnosis_fa": "اصلاح خودکار ممکن نیست.", "action": "give_up",
                          "params": {}, "confidence": 0.0}
+    # REAL-evidence override (2026-10-22): for an unhealthy live URL, a start
+    # command referencing a file absent from the project is a deterministic
+    # cause — it outranks a model guess (checked against the real project dir).
+    if kind == "unhealthy_url" and diagnosis.get("action") in ("ask_user", "give_up"):
+        det = deterministic_diagnosis(kind, state)
+        if det.get("action") == "change_start_command":
+            deps.emit("log", {"text": "diagnosis: deterministic evidence overrides model guess (start file missing)"})
+            diagnosis = det
 
     action = diagnosis["action"]
     params = diagnosis.get("params") or {}
@@ -294,7 +302,15 @@ def verify(state: dict, deps: Deps) -> dict:
         res = {"ok": True, "status": 200, "simulated": True}  # mock mode default
     res["url"] = url
     deps.emit("verify", res)
-    return {"status": "running" if res.get("ok") else "deploy_failed"}
+    if res.get("ok"):
+        return {"status": "running"}
+    # REAL evidence (2026-10-22): the release built READY but the live URL does
+    # not serve — mark the failure kind so the fix loop can diagnose from it.
+    err = res.get("error") or f"http {res.get('status')}"
+    return {"status": "deploy_failed",
+            "deploy_result": {**(state.get("deploy_result") or {}),
+                              "kind": "unhealthy_url",
+                              "message": f"live URL check failed: {err}"}}
 
 
 def report(state: dict, deps: Deps) -> dict:

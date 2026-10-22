@@ -6,6 +6,8 @@ LiaraCliDeployer (fallback). No implementation may print or log the user's token
 
 from __future__ import annotations
 
+import json
+import pathlib
 from typing import Any, Protocol
 
 
@@ -38,7 +40,7 @@ def make_deploy_config(inspection: dict, plan: dict, approvals: dict,
     env.update(approvals.get("env_values") or {})
     env.update(plan.get("env_fixes") or {})
     start_command = plan.get("start_command") or inspection.get("start_command")
-    return {
+    cfg = {
         "app_name": plan.get("app_name") or "liarapilot-app",
         "platform": plan.get("platform") or inspection.get("platform"),
         "port": plan.get("port"),
@@ -49,3 +51,23 @@ def make_deploy_config(inspection: dict, plan: dict, approvals: dict,
         "start_command": start_command,
         "project_dir": project_dir,
     }
+    # VERIFIED live 2026-10-22: the Liara node platform runs `npm start`, so a
+    # plan start_command only takes effect when package.json carries it. The
+    # deployer materializes it as a package.json override in the sources zip
+    # (prepared_files entries override same-named files) — deterministic, no
+    # code execution, and the original dependencies are preserved.
+    try:
+        if (str(cfg["platform"]).lower() == "node" and start_command and project_dir):
+            pkg_file = pathlib.Path(project_dir) / "package.json"
+            pkg = json.loads(pkg_file.read_text(encoding="utf-8")) if pkg_file.exists() else {}
+            scripts = pkg.setdefault("scripts", {})
+            if str(scripts.get("start", "")) != str(start_command):
+                scripts["start"] = str(start_command)
+                override = {"name": "package.json",
+                            "content": json.dumps(pkg, ensure_ascii=False, indent=2)}
+                cfg["prepared_files"] = [f for f in cfg["prepared_files"]
+                                         if str(f.get("name")) != "package.json"]
+                cfg["prepared_files"].append(override)
+    except (OSError, ValueError):
+        pass  # unreadable/unparsable package.json — deploy the plan as-is
+    return cfg

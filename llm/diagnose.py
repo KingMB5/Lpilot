@@ -287,6 +287,20 @@ def deterministic_diagnosis(kind: str, state: dict) -> dict:
                     "confidence": 0.9}
         return {"diagnosis_fa": "متغیرهای لازم مقدار دارند ولی سرویس قبول نکرد؛ بررسی دستی لازم است.",
                 "action": "give_up", "params": {}, "confidence": 0.4}
+    if kind == "unhealthy_url":
+        # Release READY but the live URL does not serve. The most common
+        # deterministic cause: the start command references an entry file that
+        # is not in the project (real case 2026-10-22: start node
+        # missing-entry.js -> build READY -> 502).
+        candidate = _start_candidate(state)
+        if candidate:
+            return {"diagnosis_fa": f"سرویس ساخته شد ولی آدرس زنده پاسخ نمی‌دهد؛ دستور شروع «{_start_command_of(state)}» به فایلی اشاره می‌کند که در پروژه نیست، اما «{candidate}» موجود است.",
+                    "action": "change_start_command", "params": {"start_command": candidate},
+                    "confidence": 0.85}
+        return {"diagnosis_fa": "سرویس ساخته شد ولی آدرس زنده پاسخ نمی‌دهد؛ از روی لاگ‌ها علت قطعی پیدا نشد.",
+                "action": "ask_user",
+                "params": {"question_fa": f"آدرس زنده پاسخ نمی‌دهد. دستور شروع «{_start_command_of(state)}» درست است؟ اگر نه، دستور درست را بفرست."},
+                "confidence": 0.7}
     if kind == "wrong_start_script":
         candidate = _start_candidate(state)
         if candidate:
