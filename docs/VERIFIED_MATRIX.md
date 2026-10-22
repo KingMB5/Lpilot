@@ -68,9 +68,44 @@ valid (tier-1 PASS). The moment credit exists on this account, re-run
 `LIARA_PLAN_ID=ir-small python3 scripts/live_check.py --live` to verify
 create/env/disk/upload/build/logs end-to-end. Smallest plan for test apps: `ir-small`.
 
-**BoxAPI probe (no key held in sandbox):** GET/POST to
+**BoxAPI probe (historical, before a key existed):** GET/POST to
 `https://ai.boxapi.ir/ai/v1/models|/chat/completions` → http 401 with OpenAI-shaped
-error JSON (`"type":"proxy_error"`) — endpoint reachable and OpenAI-compatible;
-default model switched to `gpt-5.4-mini` (operator's budget pick, 2026-10-22 —
-chat-capable minis are the cheapest tier in their dashboard list); stays UNVERIFIED
-until a real completion call.
+error JSON (`"type":"proxy_error"`) — endpoint reachable and OpenAI-compatible.
+
+---
+## BoxAPI real-LLM verification — 2026-10-22 (operator key used in-session, never stored)
+
+| # | Probe | Verdict | Raw evidence |
+|---|-------|---------|--------------|
+| 1 | POST /v1/chat/completions, model=gpt-5.4-mini, `max_tokens:20` | FAIL (param) | http 400 `{"error":{"message":"Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.","type":"invalid_request_error"}}` — key AUTHENTICATED (past 401), newer-OpenAI param shape |
+| 2 | same, `max_completion_tokens:20` | **PASS** | http 200, `choices[0].message.content == "PONG"`, `model:"gpt-5.4-…"`, OpenAI-shaped JSON with usage/content-filter fields |
+| 3 | OUR client end-to-end (`llm/client.py` OpenAICompatClient, temperature=0.2, DEFAULT base+model) | **PASS** | meaningful deployability answer: "No — without README, Dockerfile, or tests, deployment is too undocumented and unverified." ; call_log: `call#1 model=gpt-5.4-mini chars=162` |
+| 4 | FULL product golden path with real LLM (uvicorn DEMO_MODE=0 DEPLOYER=mock, broken-project fixture) | **PASS** | upload → assessment (beginner 5/10) → LLM Persian plan (4 steps, port 3000, platform node, env_needed=[MISSING_TOKEN, PORT], liara.json prepared) → tier-2 approval gate → approve + env values → deploy (mock URL, Liara blocked — see 402 rows above) → verify → report with real risk R6_missing_env_vars (Persian detail); session `llm_name: openai-compat` throughout |
+| 5 | INFO-log replay through our client | **PASS** | `llm call #1 (model=gpt-5.4-mini, 47 chars) — prompt content never logged`; Persian reply «سالمم، ممنون!» |
+
+**Compatibility note (real-call discovery):** `gpt-5.4-mini` rejects the legacy
+`max_tokens` parameter (requires `max_completion_tokens`). LiaraPilot's client
+sends **neither** (`model`, `messages`, `temperature=0.2` only) → compatible as-is.
+If a future switch adds token caps, use `max_completion_tokens`.
+
+**Deployer-honesty note:** row 4's deploy leg used MockDeployer because every
+live app creation is blocked by the account's zero balance (rows above). The
+LLM leg was REAL end-to-end. This split will be re-run 100% real the moment
+credit is redeemed on the token's account.
+
+---
+## live_check run — 2026-10-22 19:25 UTC (mode: LIVE, app: `liara-pilot-probe`)
+
+| # | Step (endpoint) | Tier | Verdict | Detail / raw evidence |
+|---|-----------------|------|---------|------------------------|
+| 1 | auth+list_apps (GET /v1/projects) | 1 | PASS | token valid; 0 apps visible: [] \| raw: http 200 {"projects":[]} |
+| 2 | app_details (GET /v1/projects/liara-pilot-probe) | 1 | UNVERIFIED | app 'liara-pilot-probe' does not exist yet (created in tier-2 steps) \| raw: http 404 {"statusCode":404,"error":"Not Found","message":"Not Found","data":null} |
+| 3 | metrics_summary (GET /v1/projects/liara-pilot-probe/metrics/summary) | 1 | UNVERIFIED | app missing OR endpoint path differs live (spec says Reports) \| raw: http 404 {"statusCode":404,"error":"Not Found","message":"Not Found","data":null} |
+| 4 | logs (GET /v1/projects/liara-pilot-probe/logs?since=...) | 1 | UNVERIFIED | app 'liara-pilot-probe' does not exist yet \| raw: http 404 {"statusCode":404,"error":"Not Found","message":"Project not found.","data":null} |
+| 5 | create_app (POST /v1/projects, name=liara-pilot-probe) | 2 | FAIL | http 402 \| raw: http 402 {"statusCode":402,"error":"Payment Required","message":"Not enough balance.","data":null} |
+| 6 | env+disk (POST update-envs, POST disks) | 2 | FAIL | update-envs: http 400 {"message":"project doesn't exists."} \| raw: http 400 {"message":"project doesn't exists."} |
+| 7 | upload+build (POST /v2/projects/liara-pilot-probe/sources) | 2 | FAIL | http 404 \| raw: http 404 {"statusCode":404,"error":"Not Found","message":"project_not_found","data":null} |
+| 8 | app_details (GET /v1/projects/liara-pilot-probe) | 1 | UNVERIFIED | app 'liara-pilot-probe' does not exist yet (created in tier-2 steps) \| raw: http 404 {"statusCode":404,"error":"Not Found","message":"Not Found","data":null} |
+| 9 | restart (POST /v1/projects/liara-pilot-probe/actions/restart) | 2 | FAIL | http 404 \| raw: http 404 {"statusCode":404,"error":"Not Found","message":"Project not found.","data":null} |
+
+_Tier-3 (delete app/disk) is intentionally absent — the agent never calls it._

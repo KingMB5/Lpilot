@@ -354,12 +354,16 @@ unverified_facts:
       only by a real successful API call or by presence in config/spec/paas.yaml
   - id: boxapi_model_name
     fact: >-
-      Default model is gpt-5.4-mini — the operator's budget pick from their
-      BoxAPI dashboard list (chat-capable minis are the cheapest tier; the
-      brief's sample model was gpt-6-astra). The first real completion call
-      with the operator's key is still pending (key not present in the sandbox)
-    status: UNVERIFIED
-    note: switch via LLM_MODEL env at any time; embeddings models are not chat-capable
+      Default model gpt-5.4-mini verified by a real completion call via BoxAPI
+      (2026-10-22): "PONG" round-trip, then a full product golden-path run with
+      the real LLM (plan, approval gate, report — see docs/VERIFIED_MATRIX.md
+      BoxAPI section). Model rejects legacy max_tokens (wants
+      max_completion_tokens); our client sends neither -> compatible. Any
+      dashboard model remains selectable via LLM_MODEL
+    status: VERIFIED
+    source: "real HTTP call POST /v1/chat/completions -> 200 PONG + full product run, 2026-10-22"
+    checked: "2026-10-22"
+    note: embeddings models are not chat-capable; switch models via LLM_MODEL env
   - id: plans_catalog_absent
     fact: >-
       No plan-catalog endpoint: GET /v1/plans returns 404 {"error":"Not Found"}

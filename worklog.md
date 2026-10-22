@@ -498,3 +498,34 @@ Stage Summary:
   calls per run worst case).
 - Waiting on operator: (1) API token from the credit-bearing "Liara" account,
   (2) BoxAPI LLM_API_KEY for real-LLM verification, (3) GitHub PAT for direct push.
+
+---
+Task ID: 5.2 (credentials in: real verification round)
+Agent: Z.ai Code (main)
+Task: Operator delivered new Liara token + BoxAPI key + GitHub PAT. Verify everything
+that can be verified, push the repo to GitHub, report the Liara blocker precisely.
+
+Work Log:
+- Secrets handled via /tmp/lp.env (600, outside repo, never committed); no token in any
+  repo file, log or test. Deletion note: rm /tmp/lp.env at session end.
+- New Liara token (userID [REDACTED-USERID]): tier-1 PASS (GET /v1/projects 200,
+  0 apps) but GET /v1/billing STILL {"balance":0} and live_check --live create_app ->
+  402 "Not enough balance." — same blocker on the new token. CLI would hit the same
+  wall (same API + token). Operator must redeem credit in THIS account's panel.
+- BoxAPI: key authenticated. gpt-5.4-mini rejects legacy max_tokens (400, wants
+  max_completion_tokens) — our client sends neither, compatible. Real PONG round-trip
+  PASS; real call through OUR client PASS (meaningful deployability answer);
+  FULL product golden path with REAL LLM PASS (broken fixture -> beginner assessment
+  5/10 -> Persian plan -> tier-2 approval -> deploy(mock, Liara 402) -> verify ->
+  report with R6_missing_env_vars). All rows appended to docs/VERIFIED_MATRIX.md.
+- defaults.yaml: boxapi_model_name upgraded UNVERIFIED -> VERIFIED (source + checked).
+- GitHub: PAT (KingMB5) -> repo KingMB5/liarapilot created (public), full history
+  pushed (main), topics set, gitleaks-clean history verified earlier.
+- Suite: 140 passed.
+
+Stage Summary:
+- LIVE and HONEST: LLM leg real end-to-end; Liara deploy leg BLOCKED solely by
+  account balance=0 (402 raw evidence x2 tokens). Next: operator redeems credit ->
+  rerun live_check --live (ir-small) -> 100% real A3 -> A4 agent self-deploy ->
+  cleanup of all test apps.
+- GitHub: https://github.com/KingMB5/liarapilot
