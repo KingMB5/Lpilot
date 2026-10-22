@@ -331,3 +331,23 @@ Stage Summary:
   sandbox path; it is now untracked anyway).
 - Thursday runbook: LIARA_DRY_RUN=1 first, then scripts/live_check.py (dry-run), fill
   docs/VERIFIED_MATRIX.md with real rows, then real deploys.
+
+---
+Task ID: D1 (delivery packaging)
+Agent: Z.ai Code (main)
+Task: Package the LiaraPilot Python deliverable as a downloadable zip with a delivery page at "/", verified end-to-end.
+
+Work Log:
+- Baseline: installed runtime+test deps into the sandbox venv (PEP-668 required `python3 -m pip`); suite = 134 passed.
+- Found sandbox supervisor had reverted `.gitignore` to the pre-Phase-3 version and flipped file modes; restored all 13 tracked files from HEAD (committed, verified tree).
+- Built `liarapilot-v0.1.0.zip` from HEAD via `git archive --prefix=liarapilot/` (125 entries, no corruption, no real .env, no hardcoded secrets per regex scan).
+- User-experience simulation: extracted to fresh /tmp dir -> pytest = 134 passed; booted uvicorn (DEMO_MODE=1) -> `/` 200, `/api/health` JSON ok, `/app.js` + `/style.css` 200.
+- Root-caused long-standing `/` 404: root-level Python `app/` package shadows the Next.js app router (src/app ignored). Fixed with `beforeFiles` rewrite `/` -> `/dl.html` in next.config.ts.
+- Created `public/dl.html` (standalone Persian RTL delivery page) + `public/liarapilot-v0.1.0.zip`; deleted stale src/app page/layout attempt (kept sandbox Next files untracked per .gitignore).
+- Browser verification: title OK, RTL OK, download link href=`/liarapilot-v0.1.0.zip`, click stays on `/` (download attr), zero console errors, mobile 375px no horizontal scroll, footer logic OK, screenshot reviewed.
+- Integrity: md5 of served zip == built zip (d058d0f8abe4eeadfda3a1a38f70584e); range requests 206.
+
+Stage Summary:
+- Delivery artifacts: `public/liarapilot-v0.1.0.zip` (190,242 bytes) + download page at `/`.
+- Zip contents = exactly the committed HEAD tree (99 files) — Python product only, README/AGENTS/Dockerfile/.env.example included.
+- 134/134 tests green from a fresh extraction; fresh boot verified. No secrets in package.
