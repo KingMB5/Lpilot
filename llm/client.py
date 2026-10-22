@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 from typing import Any, Callable, Protocol
 
@@ -20,6 +21,13 @@ from pydantic import BaseModel, ValidationError
 from app.redact import SecretRegister, redact_text
 
 FALLBACK_NOTICE = "(deterministic fallback — LLM output unusable)"
+
+# BoxAPI defaults (operator-provided, NOT secrets). A different provider is one
+# env change away; only LLM_API_KEY is genuinely required for the real client.
+DEFAULT_LLM_BASE_URL = "https://ai.boxapi.ir/ai/v1"
+DEFAULT_LLM_MODEL = "gpt-5.4-mini"
+
+_log = logging.getLogger("liarapilot.llm")
 
 
 class LLMError(Exception):
@@ -94,24 +102,40 @@ def _strip_code_fence(raw: str) -> str:
 
 
 class OpenAICompatClient(_Base):
-    """Real client — BoxAPI or any OpenAI-compatible endpoint via env vars."""
+    """Real client — BoxAPI or any OpenAI-compatible endpoint via env vars.
+
+    Billable-call accounting (T3): every completion increments `calls`, is
+    appended to `call_log` (metadata only — never the prompt text), and is
+    refused with BudgetExceededError once LLM_MAX_CALLS is reached.
+    """
 
     name = "openai-compat"
 
     def __init__(self, register: SecretRegister, budget: RunBudget) -> None:
         super().__init__(register, budget)
-        base = os.getenv("LLM_BASE_URL")
+        base = os.getenv("LLM_BASE_URL") or DEFAULT_LLM_BASE_URL
         key = os.getenv("LLM_API_KEY")
-        self.model = os.getenv("LLM_MODEL")
-        if not (base and key and self.model):
-            raise LLMError("LLM_BASE_URL / LLM_API_KEY / LLM_MODEL must be set in env")
+        self.model = os.getenv("LLM_MODEL") or DEFAULT_LLM_MODEL
+        if not key:
+            raise LLMError("LLM_API_KEY must be set in env for the real client")
         from openai import OpenAI  # imported lazily; not needed in demo mode
 
+        self.base_url = base
+        self.calls = 0
+        self.max_calls = max(1, int(os.getenv("LLM_MAX_CALLS", "40")))
+        self.call_log: list[str] = []  # metadata lines only, secrets never enter
         self._client = OpenAI(base_url=base, api_key=key,
                               timeout=float(os.getenv("LLM_TIMEOUT_S", "30")))
 
     def _raw_text(self, system: str, user: str) -> str:
+        if self.calls >= self.max_calls:
+            raise BudgetExceededError(
+                f"LLM_MAX_CALLS={self.max_calls} reached — refusing further billable calls")
+        self.calls += 1
         s, u = self._prepare(system, user)
+        self.call_log.append(f"call#{self.calls} model={self.model} chars={len(s) + len(u)}")
+        _log.info("llm call #%d (model=%s, %d chars) — prompt content never logged",
+                  self.calls, self.model, len(s) + len(u))
         resp = self._client.chat.completions.create(
             model=self.model,
             messages=[{"role": "system", "content": s}, {"role": "user", "content": u}],
@@ -175,7 +199,9 @@ class FakeLLM(_Base):
 
 
 def get_client(register: SecretRegister, budget: RunBudget, demo_mode: bool, concepts: dict | None = None) -> LLMClient:
-    """Factory: DEMO_MODE=1 forces offline; missing env degrades to FakeLLM + flag."""
+    """Factory: real client whenever LLM_API_KEY is set and we are not in demo
+    mode; FakeLLM is ONLY a fallback (demo mode, missing key) — never a silent
+    substitute for a configured real client."""
     if demo_mode:
         return FakeLLM(register, budget, concepts)
     try:

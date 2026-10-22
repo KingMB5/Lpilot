@@ -46,14 +46,27 @@ ALLOWLIST_SHAPES = {
 }
 
 
+class CauseModel(BaseModel):
+    """One ranked possible cause for an UNKNOWN failure (T3) — evidence must
+    quote the (already redacted) log, the model must not invent new facts."""
+
+    cause_fa: str = Field(min_length=3)
+    evidence: str = Field(default="", max_length=300)
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+
+
 class DiagnosisModel(BaseModel):
     """Schema for the fix-loop decision. An invalid `action` raises here, which
-    the LLM client treats as a validation failure (one retry, then fallback)."""
+    the LLM client treats as a validation failure (one retry, then fallback).
+    `causes_ranked` carries the ranked-cause analysis for failures that are NOT
+    one of the scripted scenarios (T3 unknown-error path); the action stays
+    allowlisted or the run escalates (give_up) with the explanation."""
 
     diagnosis_fa: str = Field(min_length=3)
     action: str
     params: dict[str, Any] = Field(default_factory=dict)
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+    causes_ranked: list[CauseModel] = Field(default_factory=list, max_length=3)
 
     @field_validator("action")
     @classmethod
@@ -66,12 +79,16 @@ class DiagnosisModel(BaseModel):
 DIAGNOSE_SYSTEM = (
     "تو «خلبان استقرار» هستی؛ استقرار روی لیارا شکست خورده و باید از روی لاگ‌ها علت را تشخیص بدهی.\n"
     "قوانین سفت‌وسخت:\n"
-    "1) فقط و فقط JSON برگردان: {\"diagnosis_fa\", \"action\", \"params\", \"confidence\"}.\n"
+    "1) فقط و فقط JSON برگردان: {\"diagnosis_fa\", \"action\", \"params\", \"confidence\", "
+    "\"causes_ranked\"}.\n"
     "2) action فقط یکی از لیست مجاز باشد و params دقیقاً شکل اعلام‌شده را داشته باشد.\n"
     "3) فقط بر اساس لاگ و inspection داده‌شده تصمیم بگیر؛ هیچ رفتار پلتفرمی یا قیمتی از خودت نساز.\n"
     "4) اگر مقدار یک متغیر رمزی لازم است، هرگز خودت مقدار نساز؛ action=ask_user بده تا کاربر بدهد.\n"
-    "5) اگر مشکل بیرون از اختیار توست، action=give_up بده.\n"
-    "6) اگر در متن ***REDACTED*** دیدی همان‌طور نگهش دار و تلاش برای بازیابی نکن."
+    "5) اگر مشکل بیرون از اختیار توست، action=give_up بده (این یعنی ارجاع به کاربر با توضیح).\n"
+    "6) اگر در متن ***REDACTED*** دیدی همان‌طور نگهش دار و تلاش برای بازیابی نکن.\n"
+    "7) اگر شکست از الگوهای شناخته‌شده نیست، در causes_ranked تا حداکثر ۳ علت محتمل را به\n"
+    "   ترتیب احتمال با شاهدی از خود لاگ بیاور؛ هرگز شاهد از خودت نساز؛ و action را فقط از\n"
+    "   لیست مجاز انتخاب کن یا give_up بده."
 )
 
 

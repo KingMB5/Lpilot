@@ -215,11 +215,14 @@ def fix(state: dict, deps: Deps) -> dict:
     params = diagnosis.get("params") or {}
     attempts += 1
     history = list(state.get("fix_history", []))
+    causes = [{"cause_fa": c.get("cause_fa", ""), "evidence": c.get("evidence", ""),
+               "confidence": c.get("confidence", 0)}
+              for c in (diagnosis.get("causes_ranked") or [])][:3]  # ranked-cause analysis (T3)
 
     if action == "give_up":
         reason = diagnosis.get("diagnosis_fa", "ادامه‌ی خودکار مسئولانه نیست.")
         deps.emit("fix", {"attempt": attempts, "max_attempts": MAX_FIX_ATTEMPTS,
-                          "action": "give_up", "reason_fa": reason})
+                          "action": "give_up", "reason_fa": reason, "causes_ranked": causes})
         return _decide(state, {"fix_attempts": attempts, "status": "escalated",
                                "escalation_reason": reason,
                                "fix_history": history + [{"attempt": attempts, "action": "give_up"}]},
@@ -249,6 +252,7 @@ def fix(state: dict, deps: Deps) -> dict:
         deps.emit("fix", {"attempt": attempts, "max_attempts": MAX_FIX_ATTEMPTS,
                           "action": "ask_user", "params": safe_params("ask_user", params),
                           "reason_fa": diagnosis.get("diagnosis_fa", ""),
+                          "causes_ranked": causes,
                           "reply_used": bool(reply)})
         return _decide(state, {"fix_attempts": attempts, "status": "running",
                                "fix_history": history + [{"attempt": attempts, "action": "ask_user",
@@ -259,7 +263,8 @@ def fix(state: dict, deps: Deps) -> dict:
     plan["prepared_files"] = [{"name": "liara.json", "content": liara_json_from_plan(plan)}]
     deps.emit("fix", {"attempt": attempts, "max_attempts": MAX_FIX_ATTEMPTS,
                       "action": action, "params": safe_params(action, params),
-                      "reason_fa": diagnosis.get("diagnosis_fa", "")})
+                      "reason_fa": diagnosis.get("diagnosis_fa", ""),
+                      "causes_ranked": causes})
     return _decide(state, {"plan": plan, "fix_attempts": attempts, "status": "running",
                            "fix_history": history + [{"attempt": attempts, "action": action,
                                                       "params": safe_params(action, params)}]},
