@@ -832,3 +832,39 @@ body {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ---- T4/T6: risk tiers, ranked causes, post-deploy ops & monitor ---- */
+.tier-badge { font-size: 0.78rem; white-space: nowrap; }
+.tier-badge .tier-level { opacity: 0.85; font-size: 0.72rem; }
+.risk-note { display: block; margin-top: 6px; }
+.causes-list { margin: 10px 0 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+.cause-item { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.cause-rank {
+  flex: none; width: 22px; height: 22px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--amber-dim); color: var(--amber-bright); font-size: 0.78rem;
+}
+.cause-text { color: var(--text); font-size: 0.9rem; }
+.cause-evidence { width: 100%; color: var(--text-muted); font-size: 0.8rem; }
+.ops-card .ops-title { font-weight: 600; margin-inline-end: 8px; }
+.ops-card .ops-msg { display: block; margin-top: 6px; font-size: 0.85rem; }
+.ops-denied { border-color: var(--red-border); }
+.risk-legend { margin-bottom: 8px; }
+.ops-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+.ops-btn { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; }
+.ops-btn .tier-badge { font-size: 0.72rem; }
+.monitor-box { margin-top: 10px; display: grid; gap: 8px; }
+.monitor-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 0.9rem; }
+.monitor-row .ltr-block { font-size: 0.85rem; }
+.monitor-src { font-size: 0.78rem; }
+.monitor-history { margin: 4px 0 0; padding: 0; list-style: none; display: flex; gap: 4px; flex-wrap: wrap; }
+.monitor-history li {
+  width: 14px; height: 22px; border-radius: 4px; background: var(--emerald-dim);
+  border: 1px solid var(--emerald-border); position: relative;
+}
+.monitor-history li.bad { background: var(--red-dim); border-color: var(--red-border); }
+.monitor-history li.old { opacity: 0.45; }
+.monitor-alert {
+  background: var(--red-dim); border: 1px solid var(--red-border); color: var(--red-bright);
+  border-radius: 12px; padding: 10px 12px; font-size: 0.9rem;
+}

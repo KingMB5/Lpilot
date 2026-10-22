@@ -115,7 +115,9 @@
     approve: function (id, body) { return req('POST', '/api/sessions/' + encodeURIComponent(id) + '/approve', body); },
     level: function (id, body) { return req('POST', '/api/sessions/' + encodeURIComponent(id) + '/level', body); },
     cancel: function (id) { return req('POST', '/api/sessions/' + encodeURIComponent(id) + '/cancel'); },
-    ask: function (id, body) { return req('POST', '/api/sessions/' + encodeURIComponent(id) + '/ask', body); }
+    ask: function (id, body) { return req('POST', '/api/sessions/' + encodeURIComponent(id) + '/ask', body); },
+    ops: function (id, body) { return req('POST', '/api/sessions/' + encodeURIComponent(id) + '/ops', body); },
+    monitor: function (id) { return req('GET', '/api/sessions/' + encodeURIComponent(id) + '/monitor'); }
   };
 
   /* ----------------------------------------------------------
@@ -715,6 +717,62 @@
       act.textContent = String(p.action);
       card.appendChild(act);
     }
+    // Risk tier badge (T4): every action shows its tier + context note.
+    if (p.risk_tier && p.risk_tier.tier) card.appendChild(tierBadge(p.risk_tier));
+    if (p.risk_note_fa) card.appendChild(el('span', 'risk-note muted small', esc(p.risk_note_fa)));
+    // Ranked causes for unscripted failures (T3): quote-only evidence.
+    if (Array.isArray(p.causes_ranked) && p.causes_ranked.length) {
+      var cwrap = el('ul', 'causes-list');
+      p.causes_ranked.forEach(function (c, i) {
+        var item = el('li', 'cause-item');
+        item.appendChild(el('span', 'cause-rank', faDigits(i + 1)));
+        item.appendChild(el('span', 'cause-text', esc((c && c.cause_fa) || '')));
+        if (c && c.evidence) item.appendChild(el('span', 'cause-evidence ltr-block', esc(c.evidence)));
+        cwrap.appendChild(item);
+      });
+      card.appendChild(cwrap);
+    }
+    li.appendChild(card);
+    timelineEl().appendChild(li);
+    scrollTimeline();
+  }
+
+  var TIER_BADGE_CLS = { auto: 'badge-zinc', approval: 'badge-amber', forbidden: 'badge-red' };
+
+  function tierBadge(rt) {
+    var cls = TIER_BADGE_CLS[rt.tier] || 'badge-zinc';
+    var b = el('span', 'badge ' + cls + ' tier-badge', esc(rt.tier_fa || rt.tier || ''));
+    if (rt.tier_level) {
+      var lbl = el('span', 'tier-level', 'سطح ' + faDigits(rt.tier_level));
+      lbl.style.marginInlineStart = '6px';
+      b.appendChild(lbl);
+    }
+    return b;
+  }
+
+  function rOps(p) {
+    var ok = !!p.ok;
+    var li = tlItem('tl-card', ok ? 'dot-emerald' : 'dot-red');
+    var card = el('div', 'card ops-card');
+    var head = el('div', 'risk-head');
+    head.appendChild(el('span', 'ops-title', 'عملیات: ' + esc(p.action || '')));
+    if (p.risk_tier && p.risk_tier.tier) head.appendChild(tierBadge(p.risk_tier));
+    card.appendChild(head);
+    card.appendChild(el('span', 'badge ' + (ok ? 'badge-emerald' : 'badge-red'), ok ? 'انجام شد' : 'ناموفق'));
+    if (p.message_fa) card.appendChild(el('span', 'ops-msg ltr-block', esc(p.message_fa)));
+    li.appendChild(card);
+    timelineEl().appendChild(li);
+    scrollTimeline();
+  }
+
+  function rOpsDenied(p) {
+    var li = tlItem('tl-card', 'dot-red');
+    var card = el('div', 'card ops-card ops-denied');
+    var head = el('div', 'risk-head');
+    head.appendChild(el('span', 'ops-title', 'اقدام رد شد: ' + esc(p.action || '')));
+    if (p.risk_tier && p.risk_tier.tier) head.appendChild(tierBadge(p.risk_tier));
+    card.appendChild(head);
+    card.appendChild(el('p', 'fix-reason', esc(p.reason_fa || 'این اقدام بدون تأیید اجرا نمی‌شود.')));
     li.appendChild(card);
     timelineEl().appendChild(li);
     scrollTimeline();
@@ -788,7 +846,9 @@
     done: rDone,
     error: rError,
     cancelled: rCancelled,
-    level_changed: rLevelChanged
+    level_changed: rLevelChanged,
+    ops: rOps,
+    ops_denied: rOpsDenied
   };
 
   /* ----------------------------------------------------------
@@ -1160,6 +1220,73 @@
     return ul;
   }
 
+  /* Post-deploy operations section (T4) — the three-tier legend + gated buttons. */
+  function opsSection() {
+    var sec = sectionCard('عملیات بعد از استقرار');
+    var legend = el('div', 'chip-wrap risk-legend');
+    legend.appendChild(tierBadge({ tier: 'auto', tier_fa: 'خودکار — فقط خواندنی', tier_level: 1 }));
+    legend.appendChild(tierBadge({ tier: 'approval', tier_fa: 'نیازمند تأیید تو', tier_level: 2 }));
+    legend.appendChild(tierBadge({ tier: 'forbidden', tier_fa: 'فقط دستی — ایجنت هرگز اجرا نمی‌کند', tier_level: 3 }));
+    sec.appendChild(legend);
+    sec.appendChild(el('p', 'muted small',
+      'خواندن وضعیت/لاگ/مصرف خودکار است؛ ری‌استارت و تغییر پلن فقط با تأیید تو؛ حذف اپ یا دیسک هرگز توسط خلبان انجام نمی‌شود.'));
+    var row = el('div', 'ops-actions');
+    var btnRestart = el('button', 'btn btn-ghost ops-btn', 'ری‌استارت برنامه');
+    btnRestart.type = 'button';
+    btnRestart.id = 'btn-ops-restart';
+    btnRestart.appendChild(tierBadge({ tier: 'approval', tier_fa: 'سطح ۲', tier_level: 2 }));
+    btnRestart.addEventListener('click', function () { openOpsApprovalModal('restart'); });
+    row.appendChild(btnRestart);
+    sec.appendChild(row);
+    return sec;
+  }
+
+  /** Tier-2 approval modal for a post-deploy operation (restart for now). */
+  function openOpsApprovalModal(action) {
+    var modal = $('#modal');
+    modal.innerHTML = '';
+    var title = el('h3', 'modal-title', 'اقدام سطح ۲ — نیازمند تأیید تو');
+    title.id = 'modal-title';
+    modal.appendChild(title);
+    var text = (action === 'restart')
+      ? 'ری‌استارت برنامه باعث قطع موقت سرویس می‌شود و بعد از آن برنامه دوباره بالا می‌آید. ادامه می‌دهی؟'
+      : 'این اقدام سطح ۲ است و فقط با تأیید تو اجرا می‌شود. ادامه می‌دهی؟';
+    modal.appendChild(el('p', 'modal-sub', text));
+    var errBox = el('div', 'error-box');
+    errBox.hidden = true;
+    errBox.setAttribute('role', 'alert');
+    modal.appendChild(errBox);
+    var actions = el('div', 'modal-actions');
+    var okBtn = el('button', 'btn btn-primary', 'تأیید و اجرا');
+    okBtn.type = 'button';
+    var noBtn = el('button', 'btn btn-ghost', 'لغو');
+    noBtn.type = 'button';
+    actions.appendChild(okBtn);
+    actions.appendChild(noBtn);
+    modal.appendChild(actions);
+    okBtn.addEventListener('click', function () {
+      errBox.hidden = true;
+      okBtn.disabled = true; noBtn.disabled = true;
+      okBtn.textContent = 'در حال اجرا…';
+      api.ops(store.sessionId, { action: action, approved: true }).then(function (res) {
+        closeModal();
+        // The report screen has no live SSE any more — show the result here.
+        addNote((action === 'restart' ? 'ری‌استارت: ' : 'عملیات: ')
+          + ((res && res.message_fa) ? res.message_fa : 'ثبت شد.'));
+      }).catch(function (e) {
+        okBtn.disabled = false; noBtn.disabled = false;
+        okBtn.textContent = 'تأیید و اجرا';
+        errBox.hidden = false;
+        errBox.textContent = (e && e.detail === 'approval_required')
+          ? 'بدون تأیید صریح اجرا نمی‌شود.'
+          : 'اجرای اقدام ناموفق بود. دوباره تلاش کن.';
+      });
+    });
+    noBtn.addEventListener('click', function () { closeModal(); });
+    $('#modal-overlay').hidden = false;
+    okBtn.focus();
+  }
+
   function renderReport() {
     var root = $('#report-root');
     root.innerHTML = '';
@@ -1189,6 +1316,9 @@
       box.appendChild(a);
       secUrl.appendChild(box);
       root.appendChild(secUrl);
+
+      // Post-deploy operations (T4): each action shows its risk tier.
+      root.appendChild(opsSection());
     }
 
     // Steps taken
