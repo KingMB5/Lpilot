@@ -19,6 +19,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from agent.assessment import assess, load as load_assessment
+from agent.risk import RiskDenied, classify, gate, safe_action
 from app.config import load_defaults
 from app.runner import ensure_llm, load_concepts, resume as runner_resume, start as runner_start
 from app.sessions import STORE, Session
@@ -252,6 +253,51 @@ def monitor(sid: str):
     from app.monitor import sample_now
 
     return sample_now(s)
+
+
+# ---------------------------------------------------------------- post-deploy ops (T4, risk-gated)
+
+OPS_ACTIONS = ("restart",)  # executable post-deploy operations this phase
+
+
+def _run_op(s, action: str, params: dict) -> dict:
+    if action == "restart":
+        if not hasattr(s.deployer, "restart"):
+            return {"ok": False, "message_fa": "این deployer از ری‌استارت پشتیبانی نمی‌کند."}
+        return s.deployer.restart()
+    return {"ok": False, "message_fa": "اقدام ناشناخته."}
+
+
+@app.post("/api/sessions/{sid}/ops")
+def ops(sid: str, body: dict):
+    """Post-deploy operations behind the three-tier risk gate (T4).
+    - tier 1 (auto): read-only — not reachable here (use /monitor), refused.
+    - tier 2 (approval): executed ONLY with approved=true for THIS action;
+      otherwise 403 approval_required + ops_denied event (visible in UI).
+    - tier 3 (forbidden): ALWAYS refused — the agent never deletes apps/disks."""
+    s = _get_session(sid)
+    action = str(body.get("action", "")).strip()
+    approved = bool(body.get("approved", False))
+    if action not in OPS_ACTIONS:
+        s.add_event("ops_denied", {"action": action or "(empty)",
+                                   "reason_fa": "اقدام ناشناخته یا غیرقابل اجرا از این مسیر."})
+        raise HTTPException(status_code=400, detail="unknown action")
+    tier = classify(action)
+    ok, reason = gate(action, approved)
+    if not ok:
+        s.add_event("ops_denied", {"action": action, "tier": tier, **safe_action(action),
+                                   "reason_fa": reason})
+        raise HTTPException(status_code=403, detail="approval_required")
+    try:
+        result = _run_op(s, action, body)
+    except RiskDenied:
+        raise HTTPException(status_code=403, detail="approval_required") from None
+    safe = dict(result)
+    safe.pop("logs", None)  # deployer logs travel via deploy_log/monitor, not here
+    s.add_event("ops", {"action": action, "tier": tier, **safe_action(action),
+                        "ok": bool(result.get("ok")),
+                        "message_fa": result.get("message", "")})
+    return safe
 
 
 # ---------------------------------------------------------------- SSE

@@ -104,5 +104,13 @@ class MockDeployer:
     def status(self) -> dict:
         return {"healthy": self._healthy, "url": self._url}
 
+    def restart(self) -> dict:
+        """Offline simulation of POST /v1/projects/{name}/actions/restart.
+        Approval gating is NOT the deployer's job — agent/risk.gate() in the
+        /ops endpoint decides whether this is ever called."""
+        self._log("restart requested ... ok")
+        self._healthy = True
+        return {"ok": True, "kind": "success", "message": "restart submitted", "logs": list(self._logs)}
+
     def _log(self, line: str) -> None:
         self._logs.append(line)

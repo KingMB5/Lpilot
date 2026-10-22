@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from agent.assessment import assess
+from agent.risk import safe_action
 from agent.plan import PlanModel, build_plan_deterministic, liara_json_from_plan
 from deployers.base import make_deploy_config
 from llm.diagnose import (DIAGNOSE_SYSTEM, LOG_TAIL_CHARS, DiagnosisModel,
@@ -165,7 +166,10 @@ def deploy(state: dict, deps: Deps) -> dict:
     for line in result.get("logs", []):
         deps.emit("deploy_log", {"text": line})
     status = "running" if result.get("ok") else "deploy_failed"
-    return {"deploy_result": result, "logs": result.get("logs", []), "status": status}
+    # every action shows its risk tier in the UI (T4): a deploy is tier 2,
+    # already covered by the approval interrupt the user just passed
+    return {"deploy_result": result, "logs": result.get("logs", []), "status": status,
+            "risk_tier": safe_action("deploy_new_version")}
 
 
 def read_logs(state: dict, deps: Deps) -> dict:
@@ -244,7 +248,9 @@ def fix(state: dict, deps: Deps) -> dict:
             plan.setdefault("env_fixes", {})[key] = reply
             deps.emit("fix", {"attempt": attempts, "max_attempts": MAX_FIX_ATTEMPTS,
                               "action": "set_env", "params": {"key": key, "value": "***"},
-                              "reason_fa": f"مقدار «{key}» از پاسخ تو گرفته و در کانفیگ استقرار گذاشته شد."})
+                              "reason_fa": f"مقدار «{key}» از پاسخ تو گرفته و در کانفیگ استقرار گذاشته شد.",
+                              "risk_tier": safe_action("set_env"),
+                              "risk_note_fa": "مقدار از خودت گرفته شد؛ هرگز به لاگ یا مدل برنمی‌گردد."})
             return _decide(state, {"plan": plan, "fix_attempts": attempts, "status": "running",
                                    "fix_history": history + [{"attempt": attempts,
                                                               "action": "set_env", "params": {"key": key}}]},
@@ -264,7 +270,11 @@ def fix(state: dict, deps: Deps) -> dict:
     deps.emit("fix", {"attempt": attempts, "max_attempts": MAX_FIX_ATTEMPTS,
                       "action": action, "params": safe_params(action, params),
                       "reason_fa": diagnosis.get("diagnosis_fa", ""),
-                      "causes_ranked": causes})
+                      "causes_ranked": causes,
+                      # tier 2 — applied inside the run the user already approved;
+                      # the UI shows the tier label so the audit trail is explicit
+                      "risk_tier": safe_action(action),
+                      "risk_note_fa": "اجرا در چارچوب تأیید استقرارِ همین اجرا"})
     return _decide(state, {"plan": plan, "fix_attempts": attempts, "status": "running",
                            "fix_history": history + [{"attempt": attempts, "action": action,
                                                       "params": safe_params(action, params)}]},
