@@ -487,3 +487,22 @@ def test_missing_release_id_is_deterministic_failure(tmp_path):
     assert res["ok"] is False and "releaseID" in res["message"]
 
 
+
+
+@respx.mock
+def test_release_unhealthy_routes_to_unhealthy_url_kind(tmp_path):
+    """UNHEALTHY = built but not serving: the start-file diagnosis family must
+    receive it (same root cause as a failed live-URL check)."""
+    respx.get(f"{BASE}/v1/projects/my-app").mock(
+        return_value=httpx.Response(200, json={"project": {"status": "ACTIVE", "isDeployed": True}}))
+    respx.post(f"{BASE}/v2/projects/my-app/sources").mock(
+        return_value=httpx.Response(200, json={"sourceID": "s"}))
+    respx.post(f"{BASE}/v2/projects/my-app/releases").mock(
+        return_value=httpx.Response(200, json={"releaseID": "rel-uh"}))
+    respx.get(f"{BASE}/v1/projects/my-app/logs").mock(return_value=httpx.Response(200, json=[]))
+    respx.get(f"{BASE}/v2/releases/rel-uh/build-logs").mock(
+        return_value=httpx.Response(200, json={"release": {"state": "UNHEALTHY"}, "buildOutput": []}))
+    res = deployer().deploy({"app_name": "my-app", "platform": "node", "port": 3000,
+                             "env": {}, "required_env": [], "prepared_files": [],
+                             "disks": [], "project_dir": tmp_project()})
+    assert res["ok"] is False and res["kind"] == "unhealthy_url"

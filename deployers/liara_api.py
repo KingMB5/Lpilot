@@ -470,7 +470,12 @@ class LiaraApiDeployer:
                 if last_state in RELEASE_BAD:
                     msg = f"release {last_state}" + (f": {fail_reason}" if fail_reason else "")
                     self._log(msg)
-                    return {"ok": False, "kind": "build_failed", "message": msg,
+                    # UNHEALTHY = built fine but the service is not serving —
+                    # the same evidence family as a failed live-URL check, so
+                    # route it to the unhealthy_url diagnosis (start-command
+                    # file check). FAILED/TIMEDOUT/CANCELED stay build_failed.
+                    kind = "unhealthy_url" if last_state == "UNHEALTHY" else "build_failed"
+                    return {"ok": False, "kind": kind, "message": msg,
                             "logs": self.logs()}
             else:
                 self._log(f"build-logs -> http {resp.status_code}")
