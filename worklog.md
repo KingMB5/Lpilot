@@ -273,3 +273,61 @@ Stage Summary:
 - Phase 2 (T13-T17) complete and browser-verified; 5 commits (T13/T14/T15/T16/T17).
 - Thursday ready: LIARA_DRY_RUN=1 -> inspect payloads -> live. UNVERIFIED list consolidated
   in config/defaults.yaml + docs/DEPLOY_AGENT.md.
+
+---
+Task ID: Phase-3 (T1..T7 — Thursday-readiness hardening)
+Agent: Z.ai Code (lead build engineer)
+Task: Prepare for real Liara execution + reduce judging risks (no big new features).
+Operator constraints: stay green, no secrets in git/logs, every "verified" claim needs real
+output, unknowns stay UNVERIFIED.
+
+Work Log:
+- Env rebuilt (old .venv was gone): uv venv + pinned requirements.txt + pytest/respx.
+- T1: untracked cloud-sandbox tooling (Next.js shell, .zscripts, Caddyfile, package.json...)
+  from the deliverable repo (files stay on disk; .gitignore section added); sandbox dev entry
+  now serves the PRODUCT via untracked scripts/serve.sh; README rewritten (DEMO/REAL modes,
+  repo layout, agent self-deploy plans A/B); Dockerfile+.dockerignore added as deterministic
+  plan B ("docker" is a VERIFIED platform value); .env.example got BoxAPI defaults (not
+  secrets) + LLM_MAX_CALLS/MONITOR_*/LIARA_LOGS_SINCE.
+- T2: downloaded official paas.yaml (54,290B) -> snapshot config/spec/paas.yaml; grep evidence
+  in docs/METRICS_VERIFICATION.md. FINDINGS: 5 Reports metrics endpoints EXIST (summary has no
+  params; cpu/memory/network-* REQUIRE numeric `since`); POST .../actions/restart; POST resize
+  {planID}; POST actions/scale {scale:1|0}; GET /v1/projects lists apps; DELETE app/disk exist
+  (mapped to risk tier 3); NO plan-catalog endpoint (prices unreadable live). BUG found: our
+  logs() did not send the REQUIRED `since` -> fixed (LIARA_LOGS_SINCE, default "0"). Wired
+  read-only LiaraApiDeployer.metrics_summary() + GET /api/sessions/{id}/monitor.
+- T3: real LLM path — LLM_BASE_URL/LLM_MODEL now default to BoxAPI values (key still required),
+  billable-call counter + LLM_MAX_CALLS cap + metadata-only call log (no prompt content);
+  FakeLLM strictly fallback; unknown-failure path: DiagnosisModel.causes_ranked (cap 3, quote-
+  only evidence), allowlist-only action or give_up escalation; fix events carry ranked causes;
+  new-scenario test uses a corrupted-SQLite log outside all scripted kinds.
+- T4: agent/risk.py three-tier matrix (auto/approval/forbidden) + gate()/require(); POST
+  /api/sessions/{id}/ops refuses tier-2 without approved=true (403 approval_required +
+  ops_denied audit event), tier-3 unreachable even with approval, unknown actions 400; LLM
+  allowlist contains no tier-3 action; fix/set_env/deploy events carry Persian tier labels;
+  MockDeployer.restart(); docs/ARCHITECTURE.md (challenge deliverable) with the matrix table.
+- T5: live plan/price catalog IMPOSSIBLE (evidence) -> prices.yaml pinned as all-UNVERIFIED
+  fallback; the deployed app's own planID IS read live (VERIFIED field) via current_plan() into
+  monitor samples.
+- T6: SessionMonitor poller (MONITOR_INTERVAL_S configurable, 0 disables, lifetime cap), short
+  capped history, episode alerting after MONITOR_ALERT_AFTER consecutive unhealthy (one alert,
+  recovery re-arm), auto-start on successful deploy; /monitor returns sample+history+alerting;
+  UI monitor panel (UNVERIFIED badge for API metrics, «استنتاج» for inference, history bars,
+  alert with tier-2 restart suggestion).
+- T7: scripts/live_check.py — staged probe in risk order: tier-1 read-only steps really send,
+  tier-2 dry-run planned by default, --live + --approve-restart explicit; PASS/FAIL/UNVERIFIED/
+  SKIPPED verdicts with raw redacted errors; appends dated rows to docs/VERIFIED_MATRIX.md;
+  never calls tier-3; refuses to invent planID. Offline smoke: real API answered 401 to a dummy
+  token (network open, endpoint live) — recorded as expected FAIL.
+- Browser E2E (agent-browser, DEMO_MODE): beginner run -> report screen shows 3-tier legend +
+  restart button + monitor panel; tier-2 modal -> approval -> «restart submitted» rendered in
+  the ops panel; monitor shows سالم + «استنتاج»; console clean; 375px + 1280px screenshots OK.
+  Fixed during verification: tier badge duplication; ops result was appended to the hidden run
+  timeline instead of the report screen.
+
+Stage Summary:
+- Suite: 134 passed (Phase-2 baseline was 98 — the "118" in the brief did not match the repo).
+- 7 commits (T1..T7 + browser-verified fix). No secrets committed (tracked .env was only a
+  sandbox path; it is now untracked anyway).
+- Thursday runbook: LIARA_DRY_RUN=1 first, then scripts/live_check.py (dry-run), fill
+  docs/VERIFIED_MATRIX.md with real rows, then real deploys.
