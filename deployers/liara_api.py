@@ -16,6 +16,16 @@ Deploy sequence (one deploy() call):
   5. poll GET /v1/projects/{name}          -> status until ok/bad or timeout
   6. url = https://{name}.liara.run        -> UNVERIFIED format (flagged)
 
+Live-API additions verified 2026-10-22 (docs/VERIFIED_MATRIX.md):
+- Team context: every request carries ?teamID=<LIARA_TEAM_ID> when the env var
+  is set — the same mechanism as the official CLI (its setGotConfig hook sets
+  the teamID search param on every URL). Credit can be TEAM-scoped: the billing
+  endpoint returns {user:{balance}, team:{balance}} with the param.
+- App creation additionally requires a network id (400 network_is_required) and
+  accepts bundlePlanID (400: "must be one of [free, basic, standard, pro]").
+  Network is resolved from LIARA_NETWORK_ID or auto-discovered (GET /v1/networks,
+  first entry). The plan+price catalog lives at GET /v1/me (NOT /v1/plans -> 404).
+
 Security (AGENTS.md):
 - The API token lives only in this instance's memory. It is never logged,
   never serialized, and redacted in dry-run output.
@@ -55,6 +65,8 @@ class LiaraApiDeployer:
 
     def __init__(self, api_token: str | None = None, *, base_url: str | None = None,
                  plan_id: str | None = None, disk_size: str | None = None,
+                 team_id: str | None = None, network_id: str | None = None,
+                 bundle_plan_id: str | None = None,
                  poll_timeout_s: float | None = None, backoff_base: float | None = None,
                  sleep: Callable[[float], None] = time.sleep, dry_run: bool | None = None) -> None:
         d = load_defaults().get("deploy", {})
@@ -62,6 +74,10 @@ class LiaraApiDeployer:
         self.base_url = (base_url or os.getenv("LIARA_API_BASE_URL", "https://api.liara.ir")).rstrip("/")
         self.plan_id = (plan_id if plan_id is not None else os.getenv("LIARA_PLAN_ID", "")).strip()
         self.disk_size = (disk_size if disk_size is not None else os.getenv("LIARA_DISK_SIZE", "1G")).strip()
+        # Team context + create-time extras (VERIFIED live 2026-10-22, see module doc).
+        self.team_id = (team_id if team_id is not None else os.getenv("LIARA_TEAM_ID", "")).strip()
+        self.network_id = (network_id if network_id is not None else os.getenv("LIARA_NETWORK_ID", "")).strip()
+        self.bundle_plan_id = (bundle_plan_id if bundle_plan_id is not None else os.getenv("LIARA_BUNDLE_PLAN_ID", "basic")).strip()
         self.http_timeout_s = float(os.getenv("LIARA_HTTP_TIMEOUT_S", str(d.get("http_timeout_s", 30))))
         self.poll_interval_s = float(d.get("poll_interval_s", 5))
         self.poll_timeout_s = float(poll_timeout_s if poll_timeout_s is not None else d.get("timeout_s", 600))
@@ -82,6 +98,10 @@ class LiaraApiDeployer:
     def _request(self, method: str, path: str, *, json_body: dict | None = None,
                  files: dict | None = None, data: dict | None = None,
                  params: dict | None = None) -> httpx.Response:
+        # VERIFIED live 2026-10-22: team context is a teamID QUERY param on every
+        # request (mirrors the official CLI's setGotConfig searchParams hook).
+        if self.team_id:
+            params = {"teamID": self.team_id, **(params or {})}
         last_exc: Exception | None = None
         for attempt in range(1, self.max_retries + 1):
             try:
@@ -189,12 +209,31 @@ class LiaraApiDeployer:
             self._log(f"metrics fetch failed: {type(e).__name__}")
             return None
 
+    def plans_catalog(self) -> dict | None:
+        """VERIFIED live 2026-10-22: GET /v1/me returns the REAL plan catalog —
+        plans.projects (RAM/CPU/volume/price-per-hour/storageClass/region/available)
+        and plans.projectBundlePlans. (GET /v1/plans is 404 — plans_catalog_absent
+        fact stays true for that path; the catalog lives here.) Read-only; Toman/hour
+        prices enable a real cost estimate later. None on any failure."""
+        if self.dry_run or not self._api_token:
+            return None
+        try:
+            resp = self._request("GET", "/v1/me")
+            if resp.status_code != 200:
+                self._log(f"plans catalog (GET /v1/me) -> http {resp.status_code}")
+                return None
+            body = resp.json()
+            plans = (body or {}).get("plans") if isinstance(body, dict) else None
+            return plans if isinstance(plans, dict) else None
+        except httpx.HTTPError as e:
+            self._log(f"plans catalog fetch failed: {type(e).__name__}")
+            return None
+
     def current_plan(self) -> str | None:
         """Live planID of the deployed app — VERIFIED field on GET
-        /v1/projects/{name} (ProjectAllDetails.planID). NOTE (T5): the API has
-        NO plan-catalog/pricing endpoint, so plan CATALOG and PRICES can never
-        be read live — data/prices.yaml stays the static fallback and the UI
-        keeps the UNVERIFIED badge on cost. Only the app's OWN planID is live."""
+        /v1/projects/{name} (ProjectAllDetails.planID). The plan CATALOG with
+        real prices is available via plans_catalog() (GET /v1/me, VERIFIED live
+        2026-10-22); data/prices.yaml remains the offline fallback."""
         if self.dry_run or not self._app_name or not self._api_token:
             return None
         try:
@@ -242,6 +281,21 @@ class LiaraApiDeployer:
 
     # ------------------------------------------------------------ steps
 
+    def _resolve_network(self) -> str:
+        """Network id for app creation (VERIFIED live: 400 network_is_required).
+        Order: LIARA_NETWORK_ID -> first entry of GET /v1/networks (read-only)."""
+        if self.network_id:
+            return self.network_id
+        resp = self._request("GET", "/v1/networks")
+        body = resp.json() if resp.status_code == 200 and isinstance(resp.json(), dict) else {}
+        for n in body.get("networks", []):
+            if isinstance(n, dict) and n.get("_id"):
+                self._log(f"network auto-discovered: {n.get('name')} (id {str(n['_id'])[:8]}…)")
+                return str(n["_id"])
+        if resp.status_code != 200:
+            self._log(f"networks list -> http {resp.status_code}")
+        return ""
+
     def _ensure_app(self, app: str, config: dict) -> dict | None:
         resp = self._request("GET", f"/v1/projects/{app}")
         if resp.status_code == 200:
@@ -249,14 +303,23 @@ class LiaraApiDeployer:
             return None
         if resp.status_code != 404:
             return self._http_fail(resp, "ensure_app")
-        # 404 -> create. VERIFIED body schema {name, planID, platform, ...}.
-        # planID values are UNVERIFIED -> operator provides LIARA_PLAN_ID; never invent.
+        # 404 -> create. VERIFIED body {name, planID, platform} + live additions
+        # 2026-10-22: bundlePlanID (tier name) and network (id) are required/expected.
+        # planID values are real (GET /v1/me catalog) -> operator provides LIARA_PLAN_ID.
         if not self.plan_id:
             return {"ok": False, "kind": "missing_plan",
                     "message": "LIARA_PLAN_ID is required to create the app (values UNVERIFIED — see Liara console)",
                     "logs": list(self._logs)}
-        body = {"name": app, "planID": self.plan_id, "platform": config.get("platform") or "node"}
-        self._log(f"create app: {app} platform={body['platform']} planID=***")
+        network = self._resolve_network()
+        if not network:
+            return {"ok": False, "kind": "missing_network",
+                    "message": "no network available: create one in the Liara console (or CLI 'liara network create') "
+                               "or set LIARA_NETWORK_ID",
+                    "logs": list(self._logs)}
+        body = {"name": app, "planID": self.plan_id,
+                "platform": config.get("platform") or "node",
+                "bundlePlanID": self.bundle_plan_id, "network": network}
+        self._log(f"create app: {app} platform={body['platform']} planID=*** bundle=*** network=***")
         resp = self._request("POST", "/v1/projects", json_body=body)
         if resp.status_code in (200, 201):
             return None
@@ -365,10 +428,14 @@ class LiaraApiDeployer:
         """The exact request sequence deploy() would send, as redacted dicts.
         Shared by dry_run; the shape is validated here too."""
         env = config.get("env") or {}
+        team_note = "teamID=<LIARA_TEAM_ID> on every request" if self.team_id else "no team context"
         reqs: list[dict] = [
             {"op": "ensure_app", "method": "GET", "path": f"/v1/projects/{app}",
-             "headers": {"Authorization": "Bearer ***"}},
+             "headers": {"Authorization": "Bearer ***"}, "note": team_note},
         ]
+        if self.team_id:
+            reqs.append({"op": "resolve_network", "method": "GET", "path": "/v1/networks",
+                         "note": "first team network; override with LIARA_NETWORK_ID"})
         if config.get("disks"):
             reqs.append({"op": "list_disks", "method": "GET",
                          "path": f"/v1/projects/{app}/disks",
@@ -403,7 +470,10 @@ class LiaraApiDeployer:
         if not self._api_token:
             problems.append("no API token in memory (approve flow or LIARA_API_TOKEN)")
         if not self.plan_id:
-            problems.append("LIARA_PLAN_ID empty — app creation would be refused (UNVERIFIED values)")
+            problems.append("LIARA_PLAN_ID empty — app creation would be refused (values from GET /v1/me catalog)")
+        if self.team_id and not self.network_id:
+            problems.append("LIARA_NETWORK_ID empty — creation will auto-discover the first team "
+                            "network (fails with a clear error if none exists)")
         if not config.get("project_dir"):
             problems.append("no project_dir in deploy config — sources upload impossible")
         platform = config.get("platform")

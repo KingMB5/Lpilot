@@ -19,9 +19,13 @@ Modes:
   default                DRY-RUN: tier-1 read-only steps ARE sent (they cannot
                          mutate anything); every tier-2 step is only PLANNED and
                          printed (payloads redacted) — nothing mutating is sent.
-  --live                 tier-2 steps are actually sent (needs LIARA_PLAN_ID).
+  --live                 tier-2 steps are actually sent (needs LIARA_PLAN_ID +
+                         a network: LIARA_NETWORK_ID or an existing team network).
   --approve-restart      additionally allows the restart step (tier 2, explicit).
   --app NAME             existing app to probe (default: liara-pilot-probe).
+
+Team accounts: set LIARA_TEAM_ID (console API page) so every request carries
+?teamID= — that is where team-scoped credit lives.
 
 No secret is ever printed: the token is redacted in every output line.
 """
@@ -61,8 +65,13 @@ class Step:
 
 
 def client(token: str) -> httpx.Client:
+    # VERIFIED live 2026-10-22: team context is a teamID query param on every
+    # request (official CLI mechanism). httpx merges client-level params into
+    # each request automatically.
+    team = os.getenv("LIARA_TEAM_ID", "").strip()
     return httpx.Client(base_url=BASE, timeout=20.0,
-                        headers={"Authorization": f"Bearer {token}"})
+                        headers={"Authorization": f"Bearer {token}"},
+                        params={"teamID": team} if team else None)
 
 
 def req(c: httpx.Client, step: Step, method: str, path: str, **kw) -> httpx.Response | None:
@@ -116,6 +125,27 @@ def step_auth(c, token, app) -> tuple[Step, dict]:
     st.status = "PASS"
     st.detail = f"token valid; {len(apps) if isinstance(apps, list) else '?'} apps visible: {names}"
     return st, {"apps": apps if isinstance(apps, list) else []}
+
+
+def step_plans_catalog(c, token, app) -> Step:
+    st = Step("plans_catalog (GET /v1/me — real plan+price catalog)", 1)
+    r = req(c, st, "GET", "/v1/me")
+    if r is None:
+        st.status, st.detail = "FAIL", f"connection failed: {st.raw}"
+    elif r.status_code == 200:
+        plans = ((r.json() or {}).get("plans") or {}).get("projects") or {}
+        iran = {pid: p for pid, p in plans.items()
+                if isinstance(p, dict) and p.get("available") and p.get("region") == "iran"}
+        if not iran:
+            st.status, st.detail = "UNVERIFIED", "200 but no available iran plans in plans.projects"
+        else:
+            cheapest = min(iran.items(), key=lambda kv: kv[1].get("price", 9e9))
+            st.status = "PASS"
+            st.detail = (f"catalog live: {len(iran)} available iran plans; cheapest={cheapest[0]} "
+                         f"({cheapest[1].get('price')} Toman/h) — real prices, replaces 404 /v1/plans")
+    else:
+        st.status, st.detail = "UNVERIFIED", f"unexpected status {r.status_code}"
+    return st
 
 
 def step_app_details(c, token, app) -> Step:
@@ -175,20 +205,32 @@ def step_logs(c, token, app) -> Step:
 def step_create_app(c, token, app, live: bool) -> Step:
     st = Step(f"create_app (POST /v1/projects, name={app})", 2)
     plan_id = os.getenv("LIARA_PLAN_ID", "").strip()
-    body = {"name": app, "planID": plan_id or "<LIARA_PLAN_ID>", "platform": "static"}
+    bundle = os.getenv("LIARA_BUNDLE_PLAN_ID", "basic").strip() or "basic"
+    body = {"name": app, "planID": plan_id or "<LIARA_PLAN_ID>", "platform": "static",
+            "bundlePlanID": bundle, "network": os.getenv("LIARA_NETWORK_ID", "").strip() or "<auto>"}
     if not live:
         st.status = "SKIPPED"
         st.detail = "DRY-RUN plan (not sent): " + json.dumps(body, ensure_ascii=False)
         st.raw = "tier-2 — nothing sent without --live"
         return st
     if not plan_id:
-        st.status, st.detail = "UNVERIFIED", "LIARA_PLAN_ID empty — cannot create (values not in spec)"
+        st.status, st.detail = "UNVERIFIED", "LIARA_PLAN_ID empty — cannot create (see GET /v1/me catalog)"
         return st
+    network = os.getenv("LIARA_NETWORK_ID", "").strip()
+    if not network:
+        rn = req(c, st, "GET", "/v1/networks")
+        nets = ((rn.json() or {}).get("networks", []) if rn is not None and rn.status_code == 200 else [])
+        network = str(nets[0].get("_id")) if nets and isinstance(nets[0], dict) and nets[0].get("_id") else ""
+    if not network:
+        st.status, st.detail = "UNVERIFIED", ("no network available — create one via console/CLI "
+                                                "('liara network create') or set LIARA_NETWORK_ID")
+        return st
+    body["network"] = network
     r = req(c, st, "POST", "/v1/projects", json=body)
     if r is None:
         st.status, st.detail = "FAIL", f"connection failed: {st.raw}"
     elif r.status_code in (200, 201):
-        st.status, st.detail = "PASS", "app created"
+        st.status, st.detail = "PASS", f"app created (planID={plan_id}, bundle={bundle}, network resolved)"
     elif r.status_code == 409:
         st.status, st.detail = "PASS", "409 conflict — app already exists (treated as present)"
     else:
@@ -309,7 +351,8 @@ def main() -> int:
         st, info = step_auth(c, token, args.app)
         results.append(st)
         if st.status == "PASS":
-            for fn in (lambda: step_app_details(c, token, args.app),
+            for fn in (lambda: step_plans_catalog(c, token, args.app),
+                       lambda: step_app_details(c, token, args.app),
                        lambda: step_metrics(c, token, args.app),
                        lambda: step_logs(c, token, args.app)):
                 results.append(fn())

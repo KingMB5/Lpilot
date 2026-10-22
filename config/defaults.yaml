@@ -366,9 +366,52 @@ unverified_facts:
     note: embeddings models are not chat-capable; switch models via LLM_MODEL env
   - id: plans_catalog_absent
     fact: >-
-      No plan-catalog endpoint: GET /v1/plans returns 404 {"error":"Not Found"}
-      against the live API; valid planIDs were learned from the 400 validation
-      message instead (see plan_ids_real)
+      The GUESS path /v1/plans does not exist: GET /v1/plans returns 404
+      {"error":"Not Found"} against the live API (the catalog itself lives at
+      GET /v1/me — see plans_catalog_at_v1_me)
     status: VERIFIED
     source: "real HTTP call GET /v1/plans -> 404, 2026-10-22"
+    checked: "2026-10-22"
+  - id: plans_catalog_at_v1_me
+    fact: >-
+      The REAL plan+price catalog is GET /v1/me — plans.projects (RAM, CPU,
+      volume, price Toman/hour, storageClass, region, available) plus
+      plans.projectBundlePlans. Cheapest available iran plan observed:
+      small-g2 (0.5 vCPU / 0.5GB / 5GB, 659.72 Toman/h); ir-small 1319.44
+      Toman/h. The official CLI reads its plan prompt from here too
+      (src/commands/app/create.ts)
+    status: VERIFIED
+    source: "real HTTP call GET /v1/me?teamID=... -> 200 full catalog, 2026-10-22; liara-cloud/cli source"
+    checked: "2026-10-22"
+  - id: team_context_query_param
+    fact: >-
+      Team context travels as a teamID QUERY PARAM on every API request
+      (official CLI sets it via its setGotConfig searchParams hook). With it,
+      GET /v1/billing returns {user:{balance}, team:{balance}} — team-scoped
+      credit is real: team balance 2000000 observed while user balance was 0.
+      Without the param, app creation hit 402 Not enough balance even though
+      team credit existed
+    status: VERIFIED
+    source: "real calls with/without ?teamID= 2026-10-22; liara-cloud/cli src/base.ts"
+    checked: "2026-10-22"
+  - id: app_create_network_required
+    fact: >-
+      POST /v1/projects REQUIRES a network id (400 {"message":
+      "network_is_required"}; invalid ids -> 400 "Invalid network id").
+      Networks are listed via GET /v1/networks ({_id, name, projectCount,
+      databaseCount}) and created via POST /v1/networks {networkName} -> 201
+      {network:{_id}} (network 'liarapilot-net' created live). An app create
+      with a valid network returned 200 {projectID}
+    status: VERIFIED
+    source: "real calls 2026-10-22 (402->400->400->201->200 chain) + liara-cloud/cli src/commands/app/create.ts"
+    checked: "2026-10-22"
+  - id: bundle_plan_tiers
+    fact: >-
+      App creation accepts bundlePlanID with values [free, basic, standard,
+      pro] (learned from the live 400 validation message; per-plan
+      availability in plans.projectBundlePlans). Created live with
+      bundlePlanID=basic on plan small-g2; app detail showed
+      bundleHourlyPrice 381.94 Toman/h
+    status: VERIFIED
+    source: "real calls 2026-10-22 (400 enum message + 200 create + GET app details)"
     checked: "2026-10-22"

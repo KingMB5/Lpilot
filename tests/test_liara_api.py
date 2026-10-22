@@ -30,7 +30,8 @@ PLAN = "g2"
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
     for var in ("DEMO_MODE", "DEPLOYER", "LIARA_API_TOKEN", "LIARA_PLAN_ID",
-                "LIARA_DISK_SIZE", "LIARA_DRY_RUN", "LIARA_API_BASE_URL"):
+                "LIARA_DISK_SIZE", "LIARA_DRY_RUN", "LIARA_API_BASE_URL",
+                "LIARA_TEAM_ID", "LIARA_NETWORK_ID", "LIARA_BUNDLE_PLAN_ID"):
         monkeypatch.delenv(var, raising=False)
 
 
@@ -83,6 +84,9 @@ def test_success_flow_creates_app_disk_envs_and_uploads(tmp_path):
         httpx.Response(200, json={"project": {"project_id": "my-app", "status": "running"}}),  # poll
     ])
     create = respx.post(f"{BASE}/v1/projects").mock(return_value=httpx.Response(200))
+    # network auto-discovery (VERIFIED live 2026-10-22: creation needs a network id)
+    respx.get(f"{BASE}/v1/networks").mock(return_value=httpx.Response(200, json={
+        "networks": [{"_id": "net-123", "name": "team-net"}]}))
     respx.get(f"{BASE}/v1/projects/my-app/disks").mock(
         return_value=httpx.Response(200, json={"disks": [], "mounts": []}))
     disk = respx.post(f"{BASE}/v1/projects/my-app/disks").mock(return_value=httpx.Response(201))
@@ -96,9 +100,11 @@ def test_success_flow_creates_app_disk_envs_and_uploads(tmp_path):
     assert res["ok"] is True and res["kind"] == "success"
     assert res["url"] == "https://my-app.liara.run"
     assert get_app.call_count == 2  # 404 then running
-    # create body matches the VERIFIED schema
+    # create body matches the VERIFIED schema (+ live 2026-10-22 additions:
+    # bundlePlanID tier name + network id, auto-discovered here)
     create_body = json.loads(create.calls.last.request.content)
-    assert create_body == {"name": "my-app", "planID": PLAN, "platform": "node"}
+    assert create_body == {"name": "my-app", "planID": PLAN, "platform": "node",
+                           "bundlePlanID": "basic", "network": "net-123"}
     # disk body: string size per spec
     assert json.loads(disk.calls.last.request.content) == {"name": "database", "size": "1G"}
     # env VALUES go to update-envs and nowhere else
@@ -126,6 +132,71 @@ def test_existing_app_skips_create():
     assert res["ok"] is True and res["kind"] == "success"
     assert create.call_count == 0  # app existed — never re-created
     assert get_app.call_count == 2  # existence check + one status poll
+
+
+# ---------------------------------------------------------------- team context (VERIFIED live 2026-10-22)
+
+@respx.mock
+def test_team_id_travels_as_query_param_on_every_request():
+    """The official CLI sets teamID on every URL (setGotConfig hook); our
+    deployer mirrors that with LIARA_TEAM_ID / team_id=."""
+    get_app = respx.get(f"{BASE}/v1/projects/my-app").mock(
+        return_value=httpx.Response(200, json={"project": {"project_id": "my-app", "status": "running"}}))
+    respx.post(f"{BASE}/v2/projects/my-app/sources").mock(
+        return_value=httpx.Response(200, json={"sourceID": "s"}))
+    res = deployer(team_id="team-42").deploy({"app_name": "my-app", "platform": "node", "port": 3000,
+                                              "env": {}, "required_env": [], "prepared_files": [],
+                                              "disks": [], "project_dir": tmp_project()})
+    assert res["ok"] is True
+    assert get_app.call_count >= 1
+    for call in get_app.calls:  # EVERY request carried the team param
+        assert call.request.url.params["teamID"] == "team-42"
+
+
+@respx.mock
+def test_missing_network_blocks_create_with_clear_error():
+    respx.get(f"{BASE}/v1/projects/my-app").mock(return_value=httpx.Response(404))
+    respx.get(f"{BASE}/v1/networks").mock(return_value=httpx.Response(200, json={"networks": []}))
+    create = respx.post(f"{BASE}/v1/projects").mock(return_value=httpx.Response(200))
+    res = deployer().deploy({"app_name": "my-app", "platform": "node", "port": 3000,
+                             "env": {}, "required_env": [], "prepared_files": [],
+                             "disks": [], "project_dir": tmp_project()})
+    assert res["ok"] is False and res["kind"] == "missing_network"
+    assert "network" in res["message"].lower()
+    assert create.call_count == 0  # never invent a network
+
+
+@respx.mock
+def test_explicit_network_id_skips_discovery():
+    get_app = respx.get(f"{BASE}/v1/projects/my-app").mock(side_effect=[
+        httpx.Response(404),   # ensure_app: does not exist
+        httpx.Response(200, json={"project": {"project_id": "my-app", "status": "running"}}),  # poll
+    ])
+    discovery = respx.get(f"{BASE}/v1/networks").mock(return_value=httpx.Response(200, json={"networks": []}))
+    create = respx.post(f"{BASE}/v1/projects").mock(return_value=httpx.Response(200))
+    respx.post(f"{BASE}/v2/projects/my-app/sources").mock(
+        return_value=httpx.Response(200, json={"sourceID": "s"}))
+    res = deployer(network_id="net-explicit").deploy(
+        {"app_name": "my-app", "platform": "node", "port": 3000, "env": {}, "required_env": [],
+         "prepared_files": [], "disks": [], "project_dir": tmp_project()})
+    assert res["ok"] is True
+    assert discovery.call_count == 0  # env-provided id wins, no discovery call
+    assert json.loads(create.calls.last.request.content)["network"] == "net-explicit"
+
+
+@respx.mock
+def test_plans_catalog_reads_v1_me():
+    """VERIFIED live 2026-10-22: the real plan+price catalog is GET /v1/me
+    (NOT /v1/plans, which stays 404)."""
+    respx.get(f"{BASE}/v1/me").mock(return_value=httpx.Response(200, json={
+        "plans": {"projects": {"small-g2": {"RAM": {"amount": 0.5}, "price": 659.72,
+                                            "region": "iran", "available": True}},
+                  "projectBundlePlans": {"small-g2": {"basic": {"available": True}}}}}))
+    d = deployer()
+    d._app_name = "my-app"
+    cat = d.plans_catalog()
+    assert cat and "small-g2" in cat["projects"]
+    assert cat["projects"]["small-g2"]["price"] == 659.72
 
 
 # ---------------------------------------------------------------- auth / errors
@@ -234,6 +305,8 @@ def test_dry_run_validates_payloads_without_sending(tmp_path):
 @respx.mock
 def test_token_never_appears_in_deployer_logs():
     respx.get(f"{BASE}/v1/projects/my-app").mock(return_value=httpx.Response(404))
+    respx.get(f"{BASE}/v1/networks").mock(return_value=httpx.Response(200, json={
+        "networks": [{"_id": "net-1", "name": "n"}]}))
     respx.post(f"{BASE}/v1/projects").mock(return_value=httpx.Response(401))
     respx.get(f"{BASE}/v1/projects/my-app/logs").mock(return_value=httpx.Response(401))
     d = deployer()
