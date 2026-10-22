@@ -67,3 +67,26 @@ liara-dev.log
 
 # runtime uploads (T12: demo artifacts never committed)
 data/uploads/
+
+# --- Cloud-sandbox tooling (NOT part of the LiaraPilot deliverable) ---
+# These files belong to the dev-sandbox supervisor and are kept on disk only;
+# they are deliberately untracked so the deliverable repo stays a clean Python product.
+/src/
+/db/
+/public/
+/prisma/
+/examples/
+/mini-services/
+/download/
+/.zscripts/
+/Caddyfile
+/package.json
+/bun.lock
+/tsconfig.json
+/next.config.ts
+/tailwind.config.ts
+/postcss.config.mjs
+/components.json
+/eslint.config.mjs
+/scripts/serve.sh
+/dev.pid
