@@ -471,3 +471,30 @@ Stage Summary:
 - BLOCKED on operator: account balance=0 -> no app creation/deploy possible (A3, A4-deploy). Unblock: redeem credit on THIS account, then `LIARA_PLAN_ID=ir-small ... live_check.py --live` + real scenario + agent deploy (runbook ready).
 - Also needed for the "real LLM" scenario: BoxAPI key on the operator's side (sandbox never holds it).
 - Security posture: no secrets in repo/history/package (verified by gitleaks); rate limiting ready for public URL.
+
+---
+Task ID: 5.1 (operator directives: budget model + GitHub plan)
+Agent: Z.ai Code (main)
+Task: Switch to a cheaper BoxAPI model from the operator's dashboard list; prepare
+GitHub direct-push plan; clarify the Liara balance=0 blocker (credit-bearing
+account is named "Liara").
+
+Work Log:
+- DEFAULT_LLM_MODEL gpt-6-astra -> gpt-5.4-mini (operator's budget pick; chat-capable
+  minis are the cheapest tier in their list — text-embedding-* are not chat models,
+  codex is code-specialized). Updated llm/client.py, .env.example, both test
+  assertions, boxapi_model_name fact in config/defaults.yaml (still UNVERIFIED until
+  first real completion call — no BoxAPI key in sandbox), VERIFIED_MATRIX BoxAPI note.
+- Fixed pre-existing duplicate `status:` key in defaults.yaml (boxapi_model_name).
+- Suite: 140 passed. Commit 1d92a21.
+- GitHub: full 41-commit history already gitleaks-clean (B6) — safe to push as-is;
+  needs operator PAT (repo scope) since sandbox has no GitHub credentials.
+- Liara blocker unchanged: token in hand belongs to an account with balance=0
+  (GET /v1/billing evidence). Operator says the credit-bearing account is named
+  "Liara" — a token from THAT account is required for A1-live/A3/A4-deploy.
+
+Stage Summary:
+- Model: gpt-5.4-mini default, LLM_MAX_CALLS=40 cap keeps cost bounded (~40 tiny
+  calls per run worst case).
+- Waiting on operator: (1) API token from the credit-bearing "Liara" account,
+  (2) BoxAPI LLM_API_KEY for real-LLM verification, (3) GitHub PAT for direct push.
