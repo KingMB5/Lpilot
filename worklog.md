@@ -351,3 +351,19 @@ Stage Summary:
 - Delivery artifacts: `public/liarapilot-v0.1.0.zip` (190,242 bytes) + download page at `/`.
 - Zip contents = exactly the committed HEAD tree (99 files) — Python product only, README/AGENTS/Dockerfile/.env.example included.
 - 134/134 tests green from a fresh extraction; fresh boot verified. No secrets in package.
+
+---
+Task ID: D2 (Windows launcher fix)
+Agent: Z.ai Code (main)
+Task: User hit "DEMO_MODE=1 uvicorn ..." failing on their Windows laptop — inline ENV=VAR is bash-only syntax.
+
+Work Log:
+- Root cause: user runs Windows; bash-style inline env assignment does not exist in cmd/PowerShell.
+- Added run_demo.bat (set DEMO_MODE=1 + python -m uvicorn, double-clickable) and run_demo.sh.
+- README: DEMO quick-start now covers Linux/macOS, PowerShell, cmd; REAL mode got a PowerShell equivalent.
+- dl.html delivery page: added Windows PowerShell/cmd command blocks + one-click launcher hint.
+- Committed 0a197a1 (134 tests green before commit). Rebuilt zip from HEAD (129 entries incl. both launchers), re-uploaded: https://x0.at/zi8G.zip, md5-verified 2d8ababb... identical.
+
+Stage Summary:
+- Windows users: double-click run_demo.bat, or $env:DEMO_MODE="1"; python -m uvicorn app.main:app --port 3000.
+- Fresh download link (v0.1.0 with launchers): https://x0.at/zi8G.zip
