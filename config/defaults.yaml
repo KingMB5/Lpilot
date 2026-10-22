@@ -134,6 +134,55 @@ verified_facts:
       LiaraPilot's own policy, not documented API behavior.
     source: "https://developers.liara.ir/spec/paas.yaml"
     checked: "2026-10-20"
+  - id: metrics_endpoints
+    fact: >-
+      Resource metrics EXIST in the spec (tag Reports): GET
+      /v1/projects/{name}/metrics/summary (no params) -> {cpuUsage:[{value,
+      applet}], memoryUsage:[...], disksUsage:[{size, usage, reportedAt, name}]};
+      GET /v1/projects/{name}/metrics/cpu | memory | network-receive |
+      network-transmit with REQUIRED query param since (type number) ->
+      Reports {end, result:[{values, applet}]}. Errors 400/401/404.
+      Real response VALUES/units not yet observed — labelled UNVERIFIED in UI
+      until a live read succeeds.
+    source: "config/spec/paas.yaml (snapshot of developers.liara.ir/spec/paas.yaml)"
+    checked: "2026-10-20"
+  - id: restart_endpoint
+    fact: >-
+      POST /v1/projects/{name}/actions/restart -> 200 "request submitted" | 401 | 404
+    source: "config/spec/paas.yaml (line ~183)"
+    checked: "2026-10-20"
+  - id: resize_plan_endpoint
+    fact: >-
+      POST /v1/projects/{name}/resize body {planID} (required) -> 200|400|401|404
+      (changePlan). Plan catalog/list endpoint DOES NOT exist in the spec —
+      planID values and prices cannot be read live from this API.
+    source: "config/spec/paas.yaml (line ~472); grep evidence in docs/METRICS_VERIFICATION.md"
+    checked: "2026-10-20"
+  - id: scale_onoff_endpoint
+    fact: >-
+      POST /v1/projects/{name}/actions/scale body {scale: number}; description:
+      "Return 1 to turn on or 0 to turn off" -> 200|401|404 (turnApp)
+    source: "config/spec/paas.yaml (line ~146)"
+    checked: "2026-10-20"
+  - id: apps_list_endpoint
+    fact: >-
+      GET /v1/projects -> Projects schema (all apps owned by the token) | 401 | 404
+    source: "config/spec/paas.yaml (line ~47)"
+    checked: "2026-10-20"
+  - id: destructive_endpoints
+    fact: >-
+      DELETE /v1/projects/{name} (deleteAppByName) and DELETE
+      /v1/projects/{id}/disks/{name} EXIST — LiaraPilot never calls them; they
+      map to risk tier 3 (forbidden / manual-only) in docs/ARCHITECTURE.md
+    source: "config/spec/paas.yaml (paths at ~93 and ~861)"
+    checked: "2026-10-20"
+  - id: logs_since_required
+    fact: >-
+      GET /v1/projects/{name}/logs REQUIRES query param since (type string,
+      description "Show logs since timestamp"); value format still UNVERIFIED —
+      LIARA_LOGS_SINCE env (default "0"), adjust if the live API rejects it
+    source: "config/spec/paas.yaml (line ~957)"
+    checked: "2026-10-20"
 
 unverified_facts:
   - id: pricing
@@ -171,7 +220,23 @@ unverified_facts:
       time from liara.json disks:[{name, mountTo}] (matches docs.liara.ir SQLite guide)
     status: UNVERIFIED
   - id: logs_since_format
-    fact: "Format of getAppLogs `since` query param (timestamp/date string)"
+    fact: >-
+      Value format of the REQUIRED getAppLogs `since` param (string) — sending
+      LIARA_LOGS_SINCE (default "0"); adjust live if rejected
+    status: UNVERIFIED
+  - id: plan_catalog_missing
+    fact: >-
+      No plan-catalog/pricing endpoint in paas.yaml (grep '/plans', 'getPlans',
+      'marketplace' -> zero path hits; 'plan' only appears as planID fields).
+      Live plan/price reading is IMPOSSIBLE via this API — prices.yaml stays the
+      fallback and the limitation is announced in the UI
+    status: UNVERIFIED  # the LIMITATION is verified; live values remain unknown
+  - id: metrics_values_semantics
+    fact: >-
+      Units/scaling of metrics values (cpuUsage/memoryUsage arrays, applet
+      labels, disksUsage usage vs size strings) not observable from the spec —
+      first live read fills this; until then values shown as-is with an
+      UNVERIFIED badge and treated as inference only
     status: UNVERIFIED
   - id: deploy_sources_payload
     fact: >-

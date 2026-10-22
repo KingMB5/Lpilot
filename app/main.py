@@ -241,6 +241,19 @@ def _state_summary(s: Session) -> dict:
     }
 
 
+# ---------------------------------------------------------------- monitoring (T2/T6, read-only)
+
+@app.get("/api/sessions/{sid}/monitor")
+def monitor(sid: str):
+    """One read-only monitoring sample. source=liara_api -> values carry an
+    UNVERIFIED badge (units unconfirmed); source=inference -> explicitly
+    «استنتاج». This endpoint NEVER mutates anything."""
+    s = _get_session(sid)
+    from app.monitor import sample_now
+
+    return sample_now(s)
+
+
 # ---------------------------------------------------------------- SSE
 
 @app.get("/api/events/{sid}")

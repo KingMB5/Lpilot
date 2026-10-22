@@ -147,11 +147,14 @@ class LiaraApiDeployer:
                     "logs": list(self._logs)}
 
     def logs(self) -> list[str]:
-        """App logs (VERIFIED GET /v1/projects/{name}/logs -> [{type,datetime,message}])."""
+        """App logs (VERIFIED GET /v1/projects/{name}/logs -> [{type,datetime,message}]).
+        `since` is REQUIRED by the spec (string type); its value format is
+        UNVERIFIED, so it comes from LIARA_LOGS_SINCE (default "0")."""
         if not self._app_name or not self._api_token:
             return list(self._logs)
         try:
-            resp = self._request("GET", f"/v1/projects/{self._app_name}/logs")
+            resp = self._request("GET", f"/v1/projects/{self._app_name}/logs",
+                                 params={"since": self._logs_since()})
             if resp.status_code != 200:
                 self._log(f"logs -> http {resp.status_code}")
                 return list(self._logs)
@@ -162,6 +165,49 @@ class LiaraApiDeployer:
         except httpx.HTTPError as e:
             self._log(f"logs fetch failed: {type(e).__name__}")
             return list(self._logs)
+
+    # ------------------------------------------------------------ read-only ops (T2/T6)
+
+    def _logs_since(self) -> str:
+        return os.getenv("LIARA_LOGS_SINCE", "0")
+
+    def metrics_summary(self) -> dict | None:
+        """VERIFIED endpoint GET /v1/projects/{name}/metrics/summary (no params).
+        Read-only. Returns the raw body ({cpuUsage, memoryUsage, disksUsage}) or
+        None on any failure — callers must label the values UNVERIFIED (units
+        not yet observed; metrics_values_semantics)."""
+        if not self._app_name or not self._api_token or self.dry_run:
+            return None
+        try:
+            resp = self._request("GET", f"/v1/projects/{self._app_name}/metrics/summary")
+            if resp.status_code != 200:
+                self._log(f"metrics/summary -> http {resp.status_code}")
+                return None
+            body = resp.json()
+            return body if isinstance(body, dict) else None
+        except httpx.HTTPError as e:
+            self._log(f"metrics fetch failed: {type(e).__name__}")
+            return None
+
+    def restart(self) -> dict:
+        """VERIFIED endpoint POST /v1/projects/{name}/actions/restart -> 200|401|404.
+        Risk tier 2 — callers MUST gate this behind explicit user approval
+        (agent/risk.py); the deployer itself never asks."""
+        if self.dry_run:
+            self._log(f"DRY-RUN restart {self._app_name} (POST /v1/projects/{self._app_name}/actions/restart)")
+            return {"ok": True, "kind": "dry_run", "message": "dry-run restart planned, nothing sent",
+                    "logs": list(self._logs)}
+        if not self._app_name or not self._api_token:
+            return {"ok": False, "kind": "unknown", "message": "no app/token in memory", "logs": list(self._logs)}
+        try:
+            resp = self._request("POST", f"/v1/projects/{self._app_name}/actions/restart")
+            if resp.status_code == 200:
+                self._log("restart submitted")
+                return {"ok": True, "kind": "success", "message": "restart submitted", "logs": list(self._logs)}
+            return self._http_fail(resp, "restart")
+        except httpx.HTTPError as e:
+            return {"ok": False, "kind": "unknown", "message": f"restart failed: {type(e).__name__}",
+                    "logs": list(self._logs)}
 
     def status(self) -> dict:
         """{healthy, url?} — health view for the verify step."""
