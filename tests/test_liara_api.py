@@ -356,3 +356,27 @@ def test_factory_selects_by_env(monkeypatch):
     monkeypatch.setenv("DEPLOYER", "liara_api")
     monkeypatch.setenv("DEMO_MODE", "1")      # demo always wins -> offline
     assert make_deployer().name == "mock"
+
+# ---------------------------------------------------------------- real deploy wait (VERIFIED live 2026-10-22)
+
+@respx.mock
+def test_await_running_waits_for_isdeployed_not_just_active_status(tmp_path):
+    """VERIFIED live: status flips ACTIVE on create while the build runs and
+    isDeployed stays false — the poller must NOT report success then."""
+    get_app = respx.get(f"{BASE}/v1/projects/my-app").mock(side_effect=[
+        httpx.Response(404),  # ensure_app: does not exist
+        httpx.Response(200, json={"project": {"status": "ACTIVE", "isDeployed": False}}),  # building
+        httpx.Response(200, json={"project": {"status": "ACTIVE", "isDeployed": False}}),  # still building
+        httpx.Response(200, json={"project": {"status": "ACTIVE", "isDeployed": True}}),   # really up
+    ])
+    respx.get(f"{BASE}/v1/networks").mock(return_value=httpx.Response(200, json={
+        "networks": [{"_id": "net-1", "name": "n"}]}))
+    respx.post(f"{BASE}/v1/projects").mock(return_value=httpx.Response(200))
+    respx.post(f"{BASE}/v2/projects/my-app/sources").mock(
+        return_value=httpx.Response(200, json={"sourceID": "s"}))
+
+    res = deployer().deploy({"app_name": "my-app", "platform": "node", "port": 3000,
+                             "env": {}, "required_env": [], "prepared_files": [],
+                             "disks": [], "project_dir": tmp_project()})
+    assert res["ok"] is True and res["url"] == "https://my-app.liara.run"
+    assert get_app.call_count == 4  # 404 + two building polls + deployed poll

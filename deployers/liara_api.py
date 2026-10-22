@@ -392,17 +392,23 @@ class LiaraApiDeployer:
         return self._http_fail(resp, "upload sources")
 
     def _await_running(self, app: str) -> dict:
-        """Poll GET /v1/projects/{name} until an OK/BAD status or timeout.
-        Status strings are UNVERIFIED (best-effort sets) — real confirmation is
-        the HTTP check of the live URL in the graph's verify step."""
+        """Poll GET /v1/projects/{name} until the app is REALLY up or timeout.
+        VERIFIED live 2026-10-22: status flips to ACTIVE immediately on create
+        while the build is still running and isDeployed stays false — so status
+        alone is not enough. Rule: wait for status OK AND isDeployed not False
+        (when the field is present). The verify step's live URL check remains
+        the final arbiter either way."""
         deadline = time.monotonic() + self.poll_timeout_s
         last_status = ""
+        last_deployed: bool | None = None
         while time.monotonic() < deadline:
             resp = self._request("GET", f"/v1/projects/{app}")
             if resp.status_code == 200:
                 proj = (resp.json() or {}).get("project") or {}
                 last_status = str(proj.get("status", "")).lower()
-                if last_status in STATUS_OK:
+                if "isDeployed" in proj:
+                    last_deployed = bool(proj.get("isDeployed"))
+                if last_status in STATUS_OK and last_deployed is not False:
                     break
                 if last_status in STATUS_BAD:
                     self._log(f"app status: {last_status} — fetching logs")
@@ -412,8 +418,31 @@ class LiaraApiDeployer:
                 self._log(f"poll -> http {resp.status_code}")
             self._sleep(self.poll_interval_s)
         else:
-            return {"ok": False, "kind": "build_failed", "message": f"deploy timeout ({self.poll_timeout_s}s), last status: {last_status or '?'}",
+            note = f", isDeployed={last_deployed}" if last_deployed is not None else ""
+            return {"ok": False, "kind": "build_failed",
+                    "message": f"deploy timeout ({self.poll_timeout_s}s), last status: {last_status or '?'}{note}",
                     "logs": self.logs()}
+        if last_deployed is False:
+            # status OK but Liara says not deployed yet — one more bounded grace
+            # window so slow builds are not misreported, then arbitrate via URL.
+            grace = min(self.poll_timeout_s, 180.0)
+            g_deadline = time.monotonic() + grace
+            while time.monotonic() < g_deadline:
+                self._sleep(self.poll_interval_s)
+                resp = self._request("GET", f"/v1/projects/{app}")
+                if resp.status_code == 200:
+                    proj = (resp.json() or {}).get("project") or {}
+                    if "isDeployed" in proj and bool(proj.get("isDeployed")):
+                        last_deployed = True
+                        break
+                    st = str(proj.get("status", "")).lower()
+                    if st in STATUS_BAD:
+                        self._log(f"app status: {st} — fetching logs")
+                        return {"ok": False, "kind": "build_failed",
+                                "message": f"app status: {st}", "logs": self.logs()}
+            if last_deployed is False:
+                self._log(f"status '{last_status}' but isDeployed=false after {grace:.0f}s grace — "
+                          "continuing; the verify step's live URL check will arbitrate")
         # UNVERIFIED URL format — flagged in logs; verify step does a real HTTP check.
         self._url = f"https://{app}.liara.run"
         self._log(f"deploy finished. url: {self._url} (format UNVERIFIED — verify step will confirm)")

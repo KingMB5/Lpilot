@@ -4,8 +4,13 @@ resume -> terminal states. Any failure lands in status=error with a clean event.
 
 from __future__ import annotations
 
+import os
 import threading
+import time
 import traceback
+from typing import Callable
+
+import httpx
 
 from agent.graph import build_graph
 from agent.nodes import Deps
@@ -53,6 +58,38 @@ def ensure_llm(session: Session) -> None:
         session.demo = demo or client.name.startswith(("fake", "cached(fake)"))
 
 
+def _live_url_checker() -> Callable[[str], dict]:
+    """REAL live-URL verification for non-demo runs.
+
+    Discovery of 2026-10-22 (docs/VERIFIED_MATRIX.md): Liara reports app status
+    ACTIVE immediately after create while the build is still running and the
+    *.liara.run subdomain does not resolve yet (isDeployed false). So the check
+    POLLS the URL until it answers HTTP < 400 (DNS + build grace) or a deadline
+    passes, then reports honestly. Read-only GETs only; timeouts are env-tunable.
+    """
+    def check(url: str) -> dict:
+        deadline = time.monotonic() + float(os.getenv("VERIFY_TIMEOUT_S", "150"))
+        interval = float(os.getenv("VERIFY_INTERVAL_S", "6"))
+        last = ""
+        attempts = 0
+        while True:
+            attempts += 1
+            try:
+                with httpx.Client(timeout=10.0, follow_redirects=True) as c:
+                    r = c.get(url)
+                if r.status_code < 400:
+                    return {"ok": True, "status": r.status_code, "attempts": attempts}
+                last = f"http {r.status_code}"
+            except httpx.HTTPError as e:
+                last = type(e).__name__
+            if time.monotonic() >= deadline:
+                return {"ok": False, "status": 0, "error": last or "no answer",
+                        "attempts": attempts}
+            time.sleep(interval)
+
+    return check
+
+
 def build_deps(session: Session) -> Deps:
     concepts = _concepts()
     ensure_llm(session)
@@ -76,8 +113,12 @@ def build_deps(session: Session) -> Deps:
     def is_cancelled() -> bool:
         return session.cancel_flag
 
+    # REAL verify: a live HTTP check of the deployed URL in every non-demo run.
+    # Demo stays offline-safe (checker None -> node's simulated default).
+    checker = None if session.demo else _live_url_checker()
+
     return Deps(llm=session.llm, deployer=session.deployer, emit=emit,
-                is_cancelled=is_cancelled, concepts=concepts)
+                is_cancelled=is_cancelled, concepts=concepts, checker=checker)
 
 
 def _collect_secrets(session: Session, register: SecretRegister) -> None:
