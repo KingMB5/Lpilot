@@ -71,4 +71,6 @@ create/env/disk/upload/build/logs end-to-end. Smallest plan for test apps: `ir-s
 **BoxAPI probe (no key held in sandbox):** GET/POST to
 `https://ai.boxapi.ir/ai/v1/models|/chat/completions` → http 401 with OpenAI-shaped
 error JSON (`"type":"proxy_error"`) — endpoint reachable and OpenAI-compatible;
-model `gpt-6-astra` (brief's sample) stays UNVERIFIED until a real completion call.
+default model switched to `gpt-5.4-mini` (operator's budget pick, 2026-10-22 —
+chat-capable minis are the cheapest tier in their dashboard list); stays UNVERIFIED
+until a real completion call.

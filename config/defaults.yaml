@@ -354,11 +354,12 @@ unverified_facts:
       only by a real successful API call or by presence in config/spec/paas.yaml
   - id: boxapi_model_name
     fact: >-
-      gpt-6-astra is the model named in the challenge brief's BoxAPI sample
-      code; the first real completion call with the operator's key is still
-      pending (key not present in the sandbox)
+      Default model is gpt-5.4-mini — the operator's budget pick from their
+      BoxAPI dashboard list (chat-capable minis are the cheapest tier; the
+      brief's sample model was gpt-6-astra). The first real completion call
+      with the operator's key is still pending (key not present in the sandbox)
     status: UNVERIFIED
-    status: UNVERIFIED
+    note: switch via LLM_MODEL env at any time; embeddings models are not chat-capable
   - id: plans_catalog_absent
     fact: >-
       No plan-catalog endpoint: GET /v1/plans returns 404 {"error":"Not Found"}
