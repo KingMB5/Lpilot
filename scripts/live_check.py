@@ -38,14 +38,16 @@ import json
 import os
 import pathlib
 import sys
+import tarfile
 import time
-import zipfile
 from datetime import datetime, timezone
 
 import httpx
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+
+from deployers.sources import ARCHIVE_NAME
 
 BASE = os.getenv("LIARA_API_BASE_URL", "https://api.liara.ir").rstrip("/")
 MATRIX_DOC = ROOT / "docs" / "VERIFIED_MATRIX.md"
@@ -96,12 +98,18 @@ def token_hint(c: httpx.Client) -> str:
     return c.headers.get("Authorization", "").split(" ", 1)[-1]
 
 
-def probe_zip() -> bytes:
-    """Minimal deterministic probe app (static platform, no secrets)."""
+def probe_archive() -> bytes:
+    """Minimal deterministic probe app (static platform, no secrets).
+    VERIFIED live 2026-10-22: the builder extracts a gzip TAR, not a zip."""
     buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        z.writestr("liara.json", json.dumps({"platform": "static", "port": 3000}))
-        z.writestr("index.html", "<!doctype html><title>liarapilot probe</title>ok")
+    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        for name, data in (
+            ("liara.json", json.dumps({"platform": "static", "port": 3000}).encode()),
+            ("index.html", b"<!doctype html><title>liarapilot probe</title>ok"),
+        ):
+            info = tarfile.TarInfo(name=name)
+            info.size = len(data)
+            tf.addfile(info, io.BytesIO(data))
     return buf.getvalue()
 
 
@@ -274,11 +282,11 @@ def step_upload(c, token, app, live: bool) -> Step:
     st = Step(f"upload+build (POST /v2/projects/{app}/sources)", 2)
     if not live:
         st.status = "SKIPPED"
-        st.detail = "DRY-RUN plan (not sent): multipart file=sources.zip (2 entries, static platform)"
+        st.detail = "DRY-RUN plan (not sent): multipart file=sources.tar.gz (2 entries, static platform)"
         st.raw = "tier-2 — nothing sent without --live"
         return st
     r = req(c, st, "POST", f"/v2/projects/{app}/sources",
-            files={"file": ("sources.zip", probe_zip(), "application/zip")})
+            files={"file": (ARCHIVE_NAME, probe_archive(), "application/gzip")})
     if r is None:
         st.status, st.detail = "FAIL", f"connection failed: {st.raw}"
     elif r.status_code == 200:

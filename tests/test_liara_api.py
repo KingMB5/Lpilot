@@ -11,7 +11,7 @@ import io
 import json
 import pathlib
 import tempfile
-import zipfile
+import tarfile
 
 import httpx
 import pytest
@@ -66,10 +66,10 @@ def _cfg(project_dir: str, **over) -> dict:
 
 
 def _zip_from_multipart(body: bytes) -> bytes:
-    """Extract the sources.zip payload from a multipart/form-data request body."""
-    marker = b'filename="sources.zip"'
+    """Extract the sources.tar.gz payload from a multipart/form-data request body."""
+    marker = b'filename="sources.tar.gz"'
     i = body.find(marker)
-    assert i != -1, "multipart body lacks sources.zip part"
+    assert i != -1, "multipart body lacks sources.tar.gz part"
     head = body.find(b"\r\n\r\n", i) + 4
     tail = body.find(b"\r\n--", head)
     return body[head:tail]
@@ -128,8 +128,9 @@ def test_success_flow_creates_app_disk_envs_and_uploads(tmp_path):
     # upload is multipart field "file"; zip carries liara.json + sources
     req = upload.calls.last.request
     assert req.headers["authorization"] == f"Bearer {TOKEN}"
-    zf = zipfile.ZipFile(io.BytesIO(_zip_from_multipart(req.content)))
-    assert "liara.json" in zf.namelist() and "index.js" in zf.namelist()
+    with tarfile.open(fileobj=io.BytesIO(_zip_from_multipart(req.content)), mode="r:gz") as tf:
+        names = tf.getnames()
+    assert "liara.json" in names and "index.js" in names
 
 
 @respx.mock
@@ -380,7 +381,8 @@ def test_source_zip_excludes_secrets_and_junk(tmp_path):
     (tmp_path / "app.js").write_text("console.log('app')", encoding="utf-8")
     (tmp_path / "cache.log").write_text("log", encoding="utf-8")
     data = build_source_zip(str(tmp_path), [{"name": "liara.json", "content": "{}"}])
-    names = set(zipfile.ZipFile(io.BytesIO(data)).namelist())
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tf:
+        names = set(tf.getnames())
     assert names == {"app.js", "liara.json"}
     meta = describe_zip(data)
     assert meta["entries"] == 2 and meta["has_liara_json"] is True

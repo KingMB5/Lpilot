@@ -57,11 +57,16 @@ def test_write_matrix_appends_dated_rows(tmp_path, monkeypatch):
     assert text2.count("## live_check run") == 2
 
 
-def test_probe_zip_is_clean():
+def test_probe_archive_is_clean():
     import io
-    import zipfile
+    import tarfile
 
-    zf = zipfile.ZipFile(io.BytesIO(lc.probe_zip()))
-    names = zf.namelist()
+    with tarfile.open(fileobj=io.BytesIO(lc.probe_archive()), mode="r:gz") as tf:
+        names = [m.name for m in tf.getmembers() if m.isfile()]
     assert names == ["liara.json", "index.html"]
-    assert "secret" not in " ".join(zf.read(n).decode() for n in names).lower()
+    payload = ""
+    with tarfile.open(fileobj=io.BytesIO(lc.probe_archive()), mode="r:gz") as tf:
+        for m in tf.getmembers():
+            if m.isfile():
+                payload += tf.extractfile(m).read().decode()
+    assert "secret" not in payload.lower()
