@@ -3,65 +3,102 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<meta name="description" content="LiaraPilot — خلبان استقرار و نگهبان پروژه: استقرار پروژه‌ات روی لیارا با اجازهٔ تو، و بعد مراقبت دوره‌ای، بررسی لاگ و پیشنهاد بهینه‌سازی با هوش مصنوعی" />
-<meta name="theme-color" content="#0a0e13" />
-<title>LiaraPilot — خلبان استقرار و نگهبان پروژه</title>
+<meta name="description" content="LiaraPilot — پروژه‌ات را تحویل بده؛ آن را روی لیارا بالا می‌آورم، و بعد مثل ایجنت ستاره هر دوره سلامت، سرعت و لاگ‌هایش را چک می‌کنم و راه‌حل می‌دهم." />
+<meta name="theme-color" content="#07090c" />
+<title>LiaraPilot — استقرار و مراقبت مداوم پروژه روی لیارا</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2310b981' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z'/%3E%3Cpath d='m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z'/%3E%3Cpath d='M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0'/%3E%3Cpath d='M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5'/%3E%3C/svg%3E" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700;800&display=swap" />
 <link rel="stylesheet" href="style.css" />
 </head>
 <body>
 
 <header class="topbar">
-  <div class="brand">
-    <span class="brand-mark" aria-hidden="true">
-      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z" /><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z" /><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0" /><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5" />
-      </svg>
-    </span>
-    <span class="brand-text">
-      <span class="brand-name">LiaraPilot</span>
-      <span class="brand-sub">خلبان استقرار روی لیارا</span>
-    </span>
+  <div class="topbar-inner">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z" /><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z" /><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0" /><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5" />
+        </svg>
+      </span>
+      <span class="brand-text">
+        <span class="brand-name">LiaraPilot</span>
+        <span class="brand-sub">استقرار + مراقبت مداوم</span>
+      </span>
+    </div>
+    <div class="topbar-side">
+      <span id="sample-badge" class="badge badge-zinc" hidden>جلسهٔ نمونه</span>
+      <span id="account-chip" class="account-chip" hidden>
+        <span class="acct-dot" aria-hidden="true"></span>
+        <span id="account-text">در حال اتصال به لیارا…</span>
+      </span>
+    </div>
   </div>
-  <span id="demo-badge" class="badge badge-amber demo-pill" hidden><span class="demo-dot" aria-hidden="true"></span>حالت دمو</span>
-  <div class="head-accent" aria-hidden="true"></div>
 </header>
 
 <main class="wrap">
 
-  <!-- ============ A) UPLOAD ============ -->
-  <section id="screen-upload" class="screen" aria-label="بارگذاری پروژه">
+  <!-- ============ A) INTAKE ============ -->
+  <section id="screen-upload" class="screen" aria-label="تحویل پروژه">
     <div class="hero">
-      <p class="hero-eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>چالش لیارا • خلبان استقرار با هوش مصنوعی</p>
-      <h1 class="hero-title">پروژه‌ات را بسپار به <span class="grad-text">خلبان</span></h1>
+      <p class="hero-eyebrow"><span class="eyebrow-dot" aria-hidden="true"></span>خلبان هوشمند استقرار و مراقبت</p>
+      <h1 class="hero-title">پروژه‌ات را تحویل بده؛<br /><span class="grad-text">بالا آوردن و مراقبتش</span> با من</h1>
       <p class="hero-sub">
-        مثل یک همکار فنی که همه‌چیز را می‌داند: پروژه‌ات را بررسی می‌کند، می‌گوید روی لیارا
-        به چه چیزی و با چه هزینه‌ای نیاز داری، و فقط با اجازهٔ تو استقرار می‌دهد —
-        و بعد از استقرار می‌ماند و مثل یک <b>نگهبان</b> هر دوره سلامت، سرعت و لاگ‌های سایتت را چک می‌کند و پیشنهاد بهینه‌سازی می‌دهد.
+        پروژه‌ات را بررسی می‌کنم و می‌گویم روی لیارا به چه چیزی نیاز داری و چقدر هزینه دارد —
+        فقط با تأیید تو استقرار می‌دهم، و بعد از آن <b>ایجنت ستاره</b> می‌ماند و هر دوره
+        سلامت، سرعت و لاگ‌های سایتت را چک می‌کند و راه‌حل می‌دهد.
       </p>
     </div>
 
-    <div id="dropzone" class="dropzone" role="button" tabindex="0" aria-describedby="dz-hint">
-      <span class="dz-icon" aria-hidden="true">
-        <svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M12 17V5" /><path d="m6 11 6-6 6 6" /><path d="M4 21h16" />
-        </svg>
-      </span>
-      <p class="dz-title" id="dz-title">فایل zip پروژه را اینجا رها کن</p>
-      <p class="dz-hint" id="dz-hint">یا کلیک کن و از رایانه‌ات انتخاب کن</p>
-      <div id="dz-spinner" class="spinner" hidden aria-hidden="true"></div>
-    </div>
-    <input id="file-input" type="file" accept=".zip,application/zip,application/x-zip-compressed" hidden />
+    <div class="intake-card">
+      <div class="intake-tabs" role="tablist" aria-label="روش تحویل پروژه">
+        <button type="button" id="tab-github" class="intake-tab is-active" role="tab" aria-selected="true" aria-controls="pane-github">
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4" /><path d="M9 18c-4.51 2-5-2-7-2" /></svg>
+          از گیت‌هاب
+        </button>
+        <button type="button" id="tab-zip" class="intake-tab" role="tab" aria-selected="false" aria-controls="pane-zip">
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="m17 8-5-5-5 5" /><path d="M12 3v12" /></svg>
+          فایل ZIP
+        </button>
+      </div>
 
-    <div id="upload-error" class="error-box" role="alert" hidden></div>
+      <div id="pane-github" class="intake-pane" role="tabpanel" aria-labelledby="tab-github">
+        <form id="github-form" class="github-form" autocomplete="off">
+          <div class="github-row">
+            <span class="github-prefix" aria-hidden="true">github.com/</span>
+            <input type="text" id="github-url" class="github-input" dir="ltr"
+                   placeholder="username/my-project" aria-label="آدرس ریپوی گیت‌هاب" />
+            <button type="submit" id="btn-github" class="btn btn-primary">تحویل پروژه</button>
+          </div>
+          <p class="intake-hint">ریپوی خصوصی هم پذیرفته می‌شود — کل ریپو همین‌جا بررسی و بعد با تأیید تو استقرار داده می‌شود.</p>
+        </form>
+      </div>
 
-    <div class="demo-row">
-      <p class="demo-label">یا یکی از پروژه‌های نمونه را امتحان کن:</p>
-      <div class="chips">
-        <button type="button" class="chip" data-fixture="next-prisma-sqlite"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z" /><path d="M3 6h18" /><path d="M16 10a4 4 0 0 1-8 0" /></svg>فروشگاه عطر</button>
-        <button type="button" class="chip" data-fixture="node-express"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2" width="20" height="8" rx="2" /><rect x="2" y="14" width="20" height="8" rx="2" /><path d="M6 6h.01" /><path d="M6 18h.01" /></svg>اکسپرس ساده</button>
-        <button type="button" class="chip" data-fixture="plain-html"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m16 18 6-6-6-6" /><path d="m8 6-6 6 6 6" /></svg>HTML ثابت</button>
-        <button type="button" class="chip" data-fixture="broken-project"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 2 1.88 1.88" /><path d="M14.12 3.88 16 2" /><path d="M9 7.13v-1a3.003 3.003 0 1 1 6 0v1" /><path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6z" /><path d="M12 20v-9" /><path d="M6.53 9C4.6 8.8 3 7.1 3 5" /><path d="M6 13H2" /><path d="M3 21c0-2.1 1.7-3.9 3.8-4" /><path d="M17.47 9c1.93-.2 3.53-1.9 3.53-4" /><path d="M22 13h-4" /><path d="M17.2 17c2.1.1 3.8 1.9 3.8 4" /></svg>پروژه خراب</button>
+      <div id="pane-zip" class="intake-pane" role="tabpanel" aria-labelledby="tab-zip" hidden>
+        <div id="dropzone" class="dropzone" role="button" tabindex="0" aria-describedby="dz-hint">
+          <span class="dz-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 17V5" /><path d="m6 11 6-6 6 6" /><path d="M4 21h16" />
+            </svg>
+          </span>
+          <p class="dz-title" id="dz-title">فایل zip پروژه را اینجا رها کن</p>
+          <p class="dz-hint" id="dz-hint">یا کلیک کن و از رایانه‌ات انتخاب کن</p>
+          <div id="dz-spinner" class="spinner" hidden aria-hidden="true"></div>
+        </div>
+        <input id="file-input" type="file" accept=".zip,application/zip,application/x-zip-compressed" hidden />
+      </div>
+
+      <div id="upload-error" class="error-box" role="alert" hidden></div>
+
+      <div class="demo-row">
+        <p class="demo-label">حوصله نداری پروژه بدهی؟ یکی از این‌ها را امتحان کن:</p>
+        <div class="chips">
+          <button type="button" class="chip" data-fixture="next-prisma-sqlite">فروشگاه Next.js</button>
+          <button type="button" class="chip" data-fixture="node-express">API اکسپرس</button>
+          <button type="button" class="chip" data-fixture="plain-html">سایت HTML</button>
+          <button type="button" class="chip" data-fixture="broken-project">پروژهٔ خراب</button>
+        </div>
       </div>
     </div>
 
@@ -72,7 +109,7 @@
             <circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="4.5" /><path d="M12 12l5.5-5.5" />
           </svg>
         </span>
-        <span class="feat-body"><b>بررسی هوشمند</b><span>تشخیص پلتفرم و ریسک‌ها، پیش از دیپلوی</span></span>
+        <span class="feat-body"><b>تحلیل واقعی پروژه</b><span>پلتفرم، پورت، متغیرها و ریسک‌ها — پیش از هر اقدام</span></span>
       </li>
       <li class="feat">
         <span class="feat-icon feat-amber" aria-hidden="true">
@@ -80,24 +117,24 @@
             <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /><path d="m9 12 2 2 4-4" />
           </svg>
         </span>
-        <span class="feat-body"><b>تأیید انسانی</b><span>هر کار حساس فقط با اجازهٔ تو</span></span>
+        <span class="feat-body"><b>هیچ کاری بدون اجازهٔ تو</b><span>هزینه و پلن را می‌بینی، تأیید می‌کنی، بعد اجرا می‌شود</span></span>
       </li>
       <li class="feat">
         <span class="feat-icon feat-violet" aria-hidden="true">
           <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+            <path d="m12 3 1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3z" />
           </svg>
         </span>
-        <span class="feat-body"><b>نگهبان پروژه</b><span>پایش دوره‌ای، بررسی لاگ و پیشنهاد بهینه‌سازی</span></span>
+        <span class="feat-body"><b>ایجنت ستاره</b><span>پایش دوره‌ای سایت: سلامت، سرعت، لاگ‌ها و پیشنهاد بهینه‌سازی</span></span>
       </li>
     </ul>
   </section>
 
   <!-- ============ B) ASSESSMENT ============ -->
-  <section id="screen-assessment" class="screen" hidden aria-label="سنجش تجربه">
+  <section id="screen-assessment" class="screen" hidden aria-label="چند سؤال کوتاه">
     <div class="assess-head">
       <h2 class="section-h">چند سؤال کوتاه</h2>
-      <p class="muted">جواب‌ها فقط تعیین می‌کنند خلبان چقدر مفصل برایت توضیح بدهد.</p>
+      <p class="muted">جواب‌ها فقط تعیین می‌کنند چقدر مفصل برایت توضیح بدهم.</p>
     </div>
 
     <button type="button" id="btn-expert-skip" class="btn btn-ghost btn-skip btn-block">…</button>
@@ -112,65 +149,23 @@
     </div>
   </section>
 
-  <!-- ============ C) RUN (pipeline + timeline) ============ -->
+  <!-- ============ C) RUN ============ -->
   <section id="screen-run" class="screen" hidden aria-label="مرحلهٔ استقرار">
     <nav class="stepper-wrap" aria-label="مرحله‌های استقرار">
       <ol id="stepper" class="stepper">
-        <li class="step" data-step="assess">
-          <span class="st-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1" /><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" /><path d="m9 14 2 2 4-4" /></svg>
-          </span>
-          <span class="st-label">سنجش</span>
-        </li>
-        <li class="step" data-step="inspect">
-          <span class="st-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg>
-          </span>
-          <span class="st-label">بازرسی</span>
-        </li>
-        <li class="step" data-step="explain">
-          <span class="st-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><path d="M12 9v4" /><path d="M12 17h.01" /></svg>
-          </span>
-          <span class="st-label">توضیح ریسک</span>
-        </li>
-        <li class="step" data-step="approve">
-          <span class="st-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /><path d="m9 12 2 2 4-4" /></svg>
-          </span>
-          <span class="st-label">تأیید</span>
-        </li>
-        <li class="step" data-step="deploy">
-          <span class="st-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z" /><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z" /><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0" /><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5" /></svg>
-          </span>
-          <span class="st-label">دیپلوی</span>
-        </li>
-        <li class="step" data-step="fix">
-          <span class="st-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" /></svg>
-          </span>
-          <span class="st-label">اصلاح</span>
-        </li>
-        <li class="step" data-step="verify">
-          <span class="st-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></svg>
-          </span>
-          <span class="st-label">صحت‌سنجی</span>
-        </li>
-        <li class="step" data-step="report">
-          <span class="st-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /><path d="M16 13H8" /><path d="M16 17H8" /></svg>
-          </span>
-          <span class="st-label">گزارش</span>
-        </li>
+        <li class="step" data-step="assess"><span class="st-icon"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1" /><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" /><path d="m9 14 2 2 4-4" /></svg></span><span class="st-label">سنجش</span></li>
+        <li class="step" data-step="inspect"><span class="st-icon"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" /></svg></span><span class="st-label">بازرسی</span></li>
+        <li class="step" data-step="explain"><span class="st-icon"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><path d="M12 9v4" /><path d="M12 17h.01" /></svg></span><span class="st-label">ریسک‌ها</span></li>
+        <li class="step" data-step="approve"><span class="st-icon"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /><path d="m9 12 2 2 4-4" /></svg></span><span class="st-label">تأیید</span></li>
+        <li class="step" data-step="deploy"><span class="st-icon"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z" /><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z" /><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0" /><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5" /></svg></span><span class="st-label">استقرار</span></li>
+        <li class="step" data-step="fix"><span class="st-icon"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" /></svg></span><span class="st-label">اصلاح</span></li>
+        <li class="step" data-step="verify"><span class="st-icon"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></svg></span><span class="st-label">صحت‌سنجی</span></li>
+        <li class="step" data-step="report"><span class="st-icon"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" /><path d="M14 2v6h6" /><path d="M16 13H8" /><path d="M16 17H8" /></svg></span><span class="st-label">گزارش</span></li>
       </ol>
     </nav>
 
     <div class="run-head">
-      <div class="run-title">
-        <h2 id="stage-title">در حال آماده‌سازی…</h2>
-      </div>
+      <div class="run-title"><h2 id="stage-title">در حال آماده‌سازی…</h2></div>
       <div class="run-controls">
         <div class="seg" role="group" aria-label="سطح توضیح">
           <button type="button" id="lvl-beginner" class="seg-btn" aria-pressed="true">توضیح بیشتر</button>
@@ -181,17 +176,17 @@
     </div>
     <form id="ask-form" class="ask-box" aria-label="پرسش وسط کار">
       <input type="text" id="ask-input" autocomplete="off" maxlength="500"
-             placeholder="سؤالت را بپرس: پورت، دیسک، هزینه… (وسط کار هم می‌توانی بپرسی)" />
+             placeholder="سؤالی داری بپرس: هزینه، پورت، متغیرها… (وسط کار هم می‌توانی بپرسی)" />
       <button type="submit" id="btn-ask" class="btn btn-ghost">پرسیدن</button>
     </form>
     <ol id="timeline" class="timeline" aria-live="polite"></ol>
   </section>
 
-  <!-- ============ D) REPORT + CARE DASHBOARD ============ -->
-  <section id="screen-report" class="screen" hidden aria-label="گزارش نهایی و نگهبان پروژه">
+  <!-- ============ D) REPORT + STAR AGENT ============ -->
+  <section id="screen-report" class="screen" hidden aria-label="گزارش نهایی و ایجنت ستاره">
     <div id="report-root"></div>
     <div class="report-actions">
-      <button type="button" id="btn-new" class="btn btn-primary">پروژه جدید</button>
+      <button type="button" id="btn-new" class="btn btn-primary">پروژهٔ جدید</button>
     </div>
   </section>
 
@@ -203,20 +198,22 @@
           <circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 3" />
         </svg>
       </span>
-      <p class="expired-msg">جلسه منقضی شده است. سرویس راه‌اندازی مجدد شده — لطفاً دوباره شروع کن.</p>
+      <p class="expired-msg">این جلسه تمام شده است. یک پروژهٔ جدید تحویل بده تا از نو شروع کنیم.</p>
       <button type="button" id="btn-restart" class="btn btn-primary">شروع دوباره</button>
     </div>
   </section>
 
 </main>
 
-<footer class="foot muted">
-  <span class="foot-brand">LiaraPilot</span>
-  <span class="foot-sep" aria-hidden="true">•</span>
-  <span>ساخته‌شده برای چالش لیارا</span>
+<footer class="foot">
+  <div class="foot-inner">
+    <span class="foot-brand">LiaraPilot</span>
+    <span class="foot-sep" aria-hidden="true">·</span>
+    <span>استقرار روی زیرساخت لیارا — با تأیید تو، و مراقبت مداوم بعد از آن</span>
+  </div>
 </footer>
 
-<!-- Approval modal (built by JS) -->
+<!-- Modal -->
 <div id="modal-overlay" class="modal-overlay" hidden>
   <div id="modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title"></div>
 </div>

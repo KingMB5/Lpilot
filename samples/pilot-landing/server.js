@@ -1,4 +1,6 @@
-/* LiaraPilot landing — zero-dependency node server (fast, stable build). */
+/* LiaraPilot — صفحهٔ محصول (zero-dependency node server).
+ * این صفحه خودِ محصول است که با خودش روی لیارا مستقر شده است.
+ */
 const http = require("http");
 
 const HTML = `<!doctype html>
@@ -6,53 +8,84 @@ const HTML = `<!doctype html>
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>LiaraPilot — خلبان استقرار و نگهبان پروژه</title>
+<title>LiaraPilot — استقرار و مراقبت مداوم پروژه روی لیارا</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
   body {
-    margin: 0; min-height: 100vh; display: grid; place-items: center;
-    background: radial-gradient(900px 500px at 80% -10%, rgba(16,185,129,.12), transparent 60%), #0a0e13;
-    color: #eef2f8; font-family: "Vazirmatn", "IRANSans", "Segoe UI", Tahoma, sans-serif;
-    padding: 24px; text-align: center;
+    margin: 0; min-height: 100vh;
+    background:
+      radial-gradient(1000px 520px at 85% -10%, rgba(16,185,129,.10), transparent 60%),
+      radial-gradient(800px 420px at 8% 0%, rgba(167,139,250,.06), transparent 55%),
+      #07090c;
+    color: #e8edf2; font-family: "Vazirmatn", "IRANSans", "Segoe UI", Tahoma, sans-serif;
+    padding: 40px 20px; display: grid; place-items: center;
   }
-  .card {
-    max-width: 640px; width: 100%;
-    background: rgba(18,22,29,.9); border: 1px solid rgba(148,163,184,.14);
-    border-radius: 20px; padding: 40px 32px; box-shadow: 0 30px 80px rgba(0,0,0,.5);
-  }
-  .badge {
+  main { max-width: 760px; width: 100%; }
+  .pill {
     display: inline-flex; align-items: center; gap: 8px;
-    background: rgba(16,185,129,.12); color: #34d399;
-    border: 1px solid rgba(16,185,129,.42);
-    padding: 6px 14px; border-radius: 999px; font-size: .8rem;
+    background: rgba(16,185,129,.10); color: #34d399;
+    border: 1px solid rgba(16,185,129,.4);
+    padding: 6px 16px; border-radius: 999px; font-size: .82rem; font-weight: 600;
   }
-  h1 { font-size: 1.9rem; margin: 18px 0 10px; }
-  .grad { background: linear-gradient(135deg,#34d399,#14b8a6); -webkit-background-clip: text; background-clip: text; color: transparent; }
-  p { color: #a3aebb; line-height: 2; margin: 8px 0 22px; }
-  ul { list-style: none; padding: 0; margin: 0 0 26px; color: #a3aebb; font-size: .95rem; line-height: 2.1; }
-  li::before { content: "✓"; color: #34d399; margin-inline-end: 8px; font-weight: 700; }
-  a.btn {
-    display: inline-block; background: linear-gradient(135deg,#10b981,#14b8a6);
-    color: #04110b; font-weight: 800; text-decoration: none;
-    padding: 12px 28px; border-radius: 12px; font-size: 1rem;
+  h1 { font-size: clamp(1.7rem, 4.5vw, 2.6rem); line-height: 1.6; margin: 20px 0 10px; }
+  .grad { background: linear-gradient(120deg,#34d399,#6ee7b7 55%,#a78bfa);
+    -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .lead { color: #94a3b3; line-height: 2.1; margin: 0 0 26px; font-size: 1.02rem; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .card {
+    background: rgba(255,255,255,.025); border: 1px solid rgba(255,255,255,.08);
+    border-radius: 16px; padding: 18px;
   }
-  .small { font-size: .78rem; color: #8b97a9; margin-top: 18px; }
+  .card h3 { margin: 0 0 8px; font-size: 1rem; }
+  .card p { color: #94a3b3; line-height: 2; margin: 0; font-size: .88rem; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%;
+    background: #10b981; box-shadow: 0 0 0 3px rgba(16,185,129,.15);
+    margin-inline-end: 8px; animation: b 2.2s ease-in-out infinite; }
+  @keyframes b { 0%,100% { opacity: 1; } 50% { opacity: .4; } }
+  .flow { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 26px 0 0; color: #cbd5e1; font-size: .85rem; }
+  .step { background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.1);
+    border-radius: 999px; padding: 6px 14px; }
+  .arr { color: #475569; }
+  footer { margin-top: 30px; color: #64748b; font-size: .8rem; line-height: 2; }
+  @media (max-width: 620px) { .grid { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
-  <main class="card">
-    <span class="badge">● چالش لیارا — خلبان استقرار با هوش مصنوعی</span>
-    <h1>پروژه‌ات را بسپار به <span class="grad">خلبان</span></h1>
-    <p>این سایت با <b>LiaraPilot</b> روی لیارا مستقر شده است: ایجنتی که پروژه را بررسی می‌کند، پلن و هزینه را می‌گوید، فقط با تأیید تو استقرار می‌دهد — و بعد، مثل یک نگهبان، دوره‌ای سلامت و سرعت و لاگ‌های سایتت را چک می‌کند.</p>
-    <ul>
-      <li>بررسی هوشمند پروژه (پلتفرم، ریسک‌ها، متغیرها)</li>
-      <li>پلن + هزینهٔ شفاف و تأیید انسانی در هر گام</li>
-      <li>خودترمیمی از لاگ‌ها و صحت‌سنجی URL زنده</li>
-      <li>نگهبان پروژه: پایش روزانه/هفتگی/ماهانه + گزارش فارسی</li>
-    </ul>
-    <a class="btn" href="https://github.com/KingMB5/Lpilot" target="_blank" rel="noopener">کد در گیت‌هاب</a>
-    <p class="small">LiaraPilot • ساخته‌شده برای چالش لیارا</p>
+  <main>
+    <span class="pill"><span class="dot"></span> این صفحه، خودِ محصول است — با خودش روی لیارا مستقر شده</span>
+    <h1>پروژه‌ات را تحویل بده؛<br/><span class="grad">بالا آوردن و مراقبتش</span> با ما</h1>
+    <p class="lead">
+      LiaraPilot پروژه‌ات را بررسی می‌کند و می‌گوید روی لیارا به چه چیزی نیاز داری و چقدر هزینه دارد —
+      فقط با تأیید تو استقرار می‌دهد، و بعد از آن مثل یک کارشناس ارزیاب می‌ماند:
+      هر دوره سرعت، سلامت و لاگ‌های سایتت را چک می‌کند و راه‌حل می‌دهد.
+    </p>
+    <div class="grid">
+      <div class="card">
+        <h3>🔍 تحلیل واقعی پروژه</h3>
+        <p>پلتفرم، پورت، متغیرهای محیطی و ریسک‌ها — از فایل‌های واقعی پروژه، پیش از هر اقدام.</p>
+      </div>
+      <div class="card">
+        <h3>🛡️ هیچ کاری بدون اجازهٔ تو</h3>
+        <p>پلن و هزینه را می‌بینی، تأیید می‌کنی، بعد اجرا می‌شود. هر اقدام حساس دروازهٔ تأیید دارد.</p>
+      </div>
+      <div class="card">
+        <h3>✨ ایجنت ستاره</h3>
+        <p>پایش روزانه/هفتگی/ماهانهٔ سایت زنده: پروب HTTP، لاگ‌های لیارا و گزارش فارسی با راه‌حل.</p>
+      </div>
+      <div class="card">
+        <h3>🧰 خودترمیمی</h3>
+        <p>اگر استقرار سالم بالا نیامد، از لاگ‌ها علت را می‌یابد، اصلاح می‌کند و دوباره صحت‌سنجی می‌کند.</p>
+      </div>
+    </div>
+    <div class="flow">
+      <span class="step">تحویل پروژه (ZIP یا گیت‌هاب)</span><span class="arr">←</span>
+      <span class="step">تحلیل و هزینه</span><span class="arr">←</span>
+      <span class="step">تأیید تو</span><span class="arr">←</span>
+      <span class="step">استقرار روی لیارا</span><span class="arr">←</span>
+      <span class="step">مراقبت دوره‌ای</span>
+    </div>
+    <footer>LiaraPilot · استقرار روی زیرساخت لیارا — با تأیید تو، و مراقبت مداوم بعد از آن</footer>
   </main>
 </body>
 </html>

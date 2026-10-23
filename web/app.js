@@ -1,11 +1,14 @@
 /* ============================================================
  * LiaraPilot — frontend logic
  * Vanilla JS, single IIFE, no globals, no dependencies.
- * Implements API CONTRACT v1 (see worklog.md):
- *   A) upload  ->  B) assessment  ->  C) run (SSE timeline)  ->  D) report
+ * API CONTRACT v1 (+v2):
+ *   intake (zip | github)  ->  assessment  ->  run (SSE timeline,
+ *   human approval gates)  ->  report  ->  star agent (periodic care)
  * All technical content (logs, commands, URLs, paths, env keys,
  * cost numbers) renders inside .ltr-block so it stays readable
- * inside the RTL page.
+ * inside the RTL page. Realtime: SSE first, snapshot-polling
+ * fallback when a proxy eats the stream (id-dedupe makes replay
+ * idempotent).
  * ============================================================ */
 (function () {
   'use strict';
@@ -25,6 +28,21 @@
   var FA_DIGITS = '۰۱۲۳۴۵۶۷۸۹';
   function faDigits(v) { return String(v).replace(/[0-9]/g, function (d) { return FA_DIGITS[Number(d)]; }); }
 
+  function faNum(v) {
+    var n = Number(v);
+    if (!Number.isFinite(n)) return '—';
+    try { return n.toLocaleString('fa-IR'); }
+    catch (e) { return faDigits(String(n)); }
+  }
+
+  function faMoney(v) { return faNum(v) + ' تومان'; }
+
+  function shallowCopy(obj) {
+    var out = {};
+    for (var k in obj) { if (Object.prototype.hasOwnProperty.call(obj, k)) out[k] = obj[k]; }
+    return out;
+  }
+
   /** Create an element; `html` is innerHTML (caller must pre-escape). */
   function el(tag, cls, html) {
     var n = document.createElement(tag);
@@ -33,54 +51,16 @@
     return n;
   }
 
-  var cssEscape = (window.CSS && CSS.escape)
-    ? function (s) { return CSS.escape(s); }
-    : function (s) { return String(s).replace(/[^a-zA-Z0-9_-]/g, function (c) { return '\\' + c; }); };
-
-  var UNVERIFIED_BADGE = 'قیمت تخمینی — نیازمند تأیید (UNVERIFIED)';
+  var UNVERIFIED_BADGE = 'قیمت تخمینی — نیازمند تأیید';
 
   /* ----------------------------------------------------------
-   * Store (single mutable state object)
-   * ---------------------------------------------------------- */
-
-  var store = {
-    sessionId: null,
-    demo: false,          // demo-mode flag -> amber badge in top bar
-    level: 'beginner',    // 'beginner' | 'expert'
-    screen: 'upload',
-    questions: [],
-    answers: {},          // {qid: value}
-    risks: [],            // [{id, payload, bodyEl}] for level re-render
-    report: null,
-    maxI: -1,             // highest rendered event id (hydration + SSE dedupe)
-    eventsSeen: false,    // snapshot had >= 1 event -> session already started
-    hasPlan: false,
-    planEl: null,         // plan card <li> (replaced, never duplicated)
-    deployGroupEl: null,  // <ol> inside the "استقرار" group
-    monitorTimer: null,   // T6 report-screen poll timer
-    careTimer: null,      // care dashboard poll timer
-    care: null,           // last care state {schedule, next_ts, running, reports, has_brief}
-    es: null,             // EventSource
-    sseTimer: null,
-    sseWatchdog: null,    // no-first-message watchdog -> polling fallback
-    sseGot: 0,            // messages received on current EventSource
-    pollTimer: null,      // snapshot polling fallback (proxy-safe)
-    pollBusy: false,
-    sseAttempts: 0,
-    cancelled: false,
-    hydrating: false,
-    pendingApproval: null
-  };
-
-  /* ----------------------------------------------------------
-   * API layer — every call funnels through req() so session
-   * expiry (404 {detail:"session_expired"}) is handled once.
+   * HTTP + API (contract v1)
    * ---------------------------------------------------------- */
 
   function req(method, url, body) {
     var opts = { method: method, headers: {} };
     if (body instanceof FormData) {
-      opts.body = body; // browser sets multipart boundary itself
+      opts.body = body; // browser sets the multipart boundary itself
     } else if (body !== undefined) {
       opts.headers['Content-Type'] = 'application/json';
       opts.body = JSON.stringify(body);
@@ -114,6 +94,8 @@
 
   var api = {
     upload: function (fd) { return req('POST', '/api/upload', fd); },
+    github: function (body) { return req('POST', '/api/github', body); },
+    account: function () { return req('GET', '/api/account'); },
     demo: function (body) { return req('POST', '/api/sessions/demo', body); },
     assessment: function () { return req('GET', '/api/assessment'); },
     answers: function (id, body) { return req('POST', '/api/sessions/' + encodeURIComponent(id) + '/answers', body); },
@@ -132,6 +114,41 @@
   };
 
   /* ----------------------------------------------------------
+   * State
+   * ---------------------------------------------------------- */
+
+  var store = {
+    screen: 'upload',
+    sessionId: null,
+    demo: false,
+    level: 'beginner',
+    answers: {},
+    questions: [],
+    expertSkip: {},
+    eventsSeen: false,
+    maxI: 0,
+    report: null,
+    hasPlan: false,
+    planEl: null,
+    deployGroupEl: null,
+    risks: [],
+    cancelled: false,
+    pendingApproval: null,
+    care: null,
+    careShowAll: false,
+    es: null,
+    sseTimer: null,
+    sseWatchdog: null,
+    sseAttempts: 0,
+    sseGot: 0,
+    pollTimer: null,
+    pollBusy: false,
+    monitorTimer: null,
+    careTimer: null,
+    hydrating: false
+  };
+
+  /* ----------------------------------------------------------
    * Screens / top bar
    * ---------------------------------------------------------- */
 
@@ -143,16 +160,17 @@
       var node = $('#screen-' + s);
       if (node) node.hidden = (s !== name);
     });
-    if (name === 'run') bindAsk();  // mid-run Q&A input (T15)
+    if (name === 'run') bindAsk();
     window.scrollTo(0, 0);
   }
 
-  function updateDemoBadge() { $('#demo-badge').hidden = (store.demo !== true); }
+  function updateSampleBadge() { $('#sample-badge').hidden = (store.demo !== true); }
 
   function showExpired() {
     if (store.screen === 'expired') return;
     stopSSE();
     stopCarePolling();
+    stopMonitorPolling();
     closeModal();
     showScreen('expired');
   }
@@ -164,7 +182,26 @@
   }
 
   /* ----------------------------------------------------------
-   * A) Upload screen
+   * Account chip — real Liara account status (read-only)
+   * ---------------------------------------------------------- */
+
+  function loadAccount() {
+    api.account().then(function (a) {
+      var chip = $('#account-chip');
+      if (!a || a.connected !== true) { chip.hidden = true; return; }
+      var parts = ['لیارا · متصل'];
+      if (a.balance_toman != null) parts.push('موجودی ' + faMoney(a.balance_toman));
+      $('#account-text').textContent = parts.join(' — ');
+      if (a.default_plan && a.plan_price_hourly_toman != null) {
+        chip.title = 'پلن پیش‌فرض: ' + a.default_plan +
+          ' — ' + faNum(a.plan_price_hourly_toman) + ' تومان در ساعت (قیمت واقعی از API)';
+      }
+      chip.hidden = false;
+    }).catch(function () { $('#account-chip').hidden = true; });
+  }
+
+  /* ----------------------------------------------------------
+   * A) Intake screen
    * ---------------------------------------------------------- */
 
   var DZ_TITLE = 'فایل zip پروژه را اینجا رها کن';
@@ -172,11 +209,15 @@
 
   function setUploadLoading(on) {
     var dz = $('#dropzone');
-    dz.classList.toggle('loading', on);
-    $('#dz-spinner').hidden = !on;
-    $('#dz-title').textContent = on ? DZ_TITLE_BUSY : DZ_TITLE;
+    if (dz) {
+      dz.classList.toggle('loading', on);
+      $('#dz-spinner').hidden = !on;
+      $('#dz-title').textContent = on ? DZ_TITLE_BUSY : DZ_TITLE;
+    }
     var chips = document.querySelectorAll('.chip');
     for (var i = 0; i < chips.length; i++) chips[i].disabled = on;
+    var gh = $('#btn-github');
+    if (gh) gh.disabled = on;
   }
 
   function showUploadError(prefix, detail) {
@@ -185,6 +226,20 @@
     err.appendChild(document.createTextNode(prefix));
     if (detail) err.appendChild(el('span', 'ltr-block', esc(detail)));
     err.hidden = false;
+  }
+
+  function intakeReady(data) {
+    store.sessionId = data.session_id;
+    if (data.demo === true) { store.demo = true; updateSampleBadge(); }
+    goAssessment();
+  }
+
+  function intakeFail(e, prefix) {
+    setUploadLoading(false);
+    if (isExpired(e)) return;
+    var msg = (e && e.detail && e.detail.length < 300) ? e.detail : '';
+    if (!msg && e && e.kind === 'network') msg = 'اتصال به سرور برقرار نشد.';
+    showUploadError(prefix, msg);
   }
 
   function uploadFile(file) {
@@ -198,14 +253,34 @@
     setUploadLoading(true);
     var fd = new FormData();
     fd.append('file', file, file.name);
-    api.upload(fd).then(function (data) {
-      store.sessionId = data.session_id;
-      if (data.demo === true) { store.demo = true; updateDemoBadge(); }
-      return goAssessment();
+    api.upload(fd).then(intakeReady).catch(function (e) {
+      intakeFail(e, 'آپلود ناموفق بود. دوباره تلاش کن.');
+    });
+  }
+
+  function submitGithub(ev) {
+    ev.preventDefault();
+    $('#upload-error').hidden = true;
+    var input = $('#github-url');
+    var raw = String(input.value || '').trim();
+    if (!raw) {
+      showUploadError('آدرس ریپو را وارد کن — مثلاً: username/my-project', null);
+      input.focus();
+      return;
+    }
+    setUploadLoading(true);
+    var btn = $('#btn-github');
+    btn.disabled = true;
+    btn.textContent = 'در حال دریافت…';
+    api.github({ url: raw }).then(function (data) {
+      btn.disabled = false;
+      btn.textContent = 'تحویل پروژه';
+      input.value = '';
+      intakeReady(data);
     }).catch(function (e) {
-      setUploadLoading(false);
-      if (isExpired(e)) return;
-      showUploadError('آپلود ناموفق بود. دوباره تلاش کن.', e.detail || (e.kind === 'network' ? 'اتصال به سرور برقرار نشد.' : ''));
+      btn.disabled = false;
+      btn.textContent = 'تحویل پروژه';
+      intakeFail(e, 'دریافت از گیت‌هاب ناموفق بود.');
     });
   }
 
@@ -215,18 +290,35 @@
     for (var i = 0; i < chips.length; i++) chips[i].disabled = true;
     if (chipBtn) chipBtn.classList.add('loading');
     api.demo({ fixture: key }).then(function (data) {
-      store.sessionId = data.session_id;
-      if (data.demo === true) { store.demo = true; updateDemoBadge(); }
-      return goAssessment();
-    }).catch(function (e) {
-      for (var j = 0; j < chips.length; j++) chips[j].disabled = false;
       if (chipBtn) chipBtn.classList.remove('loading');
-      if (isExpired(e)) return;
-      showUploadError('ساخت پروژهٔ نمونه ناموفق بود.', e.detail || (e.kind === 'network' ? 'اتصال به سرور برقرار نشد.' : ''));
+      intakeReady(data);
+    }).catch(function (e) {
+      if (chipBtn) chipBtn.classList.remove('loading');
+      for (var j = 0; j < chips.length; j++) chips[j].disabled = false;
+      intakeFail(e, 'ساخت پروژهٔ نمونه ناموفق بود.');
     });
   }
 
+  function wireTabs() {
+    var tabGh = $('#tab-github'), tabZip = $('#tab-zip');
+    var paneGh = $('#pane-github'), paneZip = $('#pane-zip');
+    function pick(which) {
+      var gh = which === 'github';
+      tabGh.classList.toggle('is-active', gh);
+      tabZip.classList.toggle('is-active', !gh);
+      tabGh.setAttribute('aria-selected', String(gh));
+      tabZip.setAttribute('aria-selected', String(!gh));
+      paneGh.hidden = !gh;
+      paneZip.hidden = gh;
+    }
+    tabGh.addEventListener('click', function () { pick('github'); });
+    tabZip.addEventListener('click', function () { pick('zip'); });
+  }
+
   function wireUpload() {
+    wireTabs();
+    $('#github-form').addEventListener('submit', submitGithub);
+
     var dz = $('#dropzone');
     dz.addEventListener('click', function () {
       if (!dz.classList.contains('loading')) $('#file-input').click();
@@ -356,12 +448,6 @@
     });
   }
 
-  function shallowCopy(obj) {
-    var out = {};
-    for (var k in obj) { if (Object.prototype.hasOwnProperty.call(obj, k)) out[k] = obj[k]; }
-    return out;
-  }
-
   /* ----------------------------------------------------------
    * C) Run screen — entry, hydration, SSE
    * ---------------------------------------------------------- */
@@ -405,7 +491,7 @@
     store.hydrating = true;
     return api.snapshot(store.sessionId).then(function (snap) {
       snap = snap || {};
-      if (snap.demo === true) { store.demo = true; updateDemoBadge(); }
+      if (snap.demo === true) { store.demo = true; updateSampleBadge(); }
       if (snap.level === 'beginner' || snap.level === 'expert') {
         store.level = snap.level;
         setLevelUI();
@@ -434,7 +520,7 @@
       if (snap.plan && !store.hasPlan) handleEvent(null, 'plan', snap.plan);
       if (snap.report) store.report = snap.report;
 
-      // Pending approval: snapshot field wins (note not yet shown for it);
+      // Pending approval: snapshot field wins (its note is not yet shown);
       // otherwise an approval_required that is still the newest event means
       // the user has not decided yet (its note was already added by the
       // event route during replay above — do not duplicate it).
@@ -460,13 +546,12 @@
 
   /**
    * SSE with manual reconnect + a POLLING FALLBACK.
-   * Discovery 2026-10-23: the Next.js dev proxy compresses (gzip) proxied
-   * responses whenever the browser sends Accept-Encoding — and the compressed
-   * SSE stream then never delivers chunks to the browser (curl without that
-   * header works fine). So: if the EventSource stays silent for 5s, we tear
-   * it down and poll the snapshot endpoint instead — handleEvent() already
-   * dedupes by integer id, so replay through polling is idempotent. On a
-   * direct deployment (liara.run, no proxy) SSE stays live.
+   * The Next.js dev proxy compresses (gzip) proxied responses whenever the
+   * browser sends Accept-Encoding — and the compressed SSE stream then never
+   * delivers chunks to the browser. So: if the EventSource stays silent for
+   * 5s, we tear it down and poll the snapshot endpoint instead —
+   * handleEvent() dedupes by integer id, so replay through polling is
+   * idempotent. On a direct deployment (liara.run, no proxy) SSE stays live.
    */
   function openSSE() {
     stopSSE();
@@ -581,7 +666,6 @@
   }
 
   function scrollTimeline() {
-    if (store.hydrating) return; // batch scroll once after hydration
     var tl = timelineEl();
     var last = tl.lastElementChild;
     if (last && typeof last.scrollIntoView === 'function') {
@@ -602,7 +686,7 @@
     var li = el('li', 'tl-entry tl-group');
     li.appendChild(el('span', 'tl-dot dot-amber'));
     var box = el('div', 'group-box');
-    box.appendChild(el('div', 'group-title', 'استقرار'));
+    box.appendChild(el('div', 'group-title', 'استقرار — لاگ زنده'));
     var list = el('ol', 'group-list');
     box.appendChild(list);
     li.appendChild(box);
@@ -617,7 +701,7 @@
 
   function rStage(p) {
     if (p.fa) $('#stage-title').textContent = p.fa;
-    syncStepper(p.name); // presentational pipeline stepper (task 4-a)
+    syncStepper(p.name);
     var li = tlItem('tl-stage', 'dot-amber');
     var box = el('div', 'stage-box');
     box.appendChild(el('span', 'stage-fa', esc(p.fa || p.name || '')));
@@ -706,6 +790,35 @@
     });
   }
 
+  /** Real-price grid (live from the Liara API) or the fallback cost line. */
+  function costBlock(p) {
+    var wrap = el('div');
+    if (p && p.price_hourly_toman != null && p.plan_id) {
+      var grid = el('div', 'cost-grid');
+      [['پلن پیشنهادی', String(p.plan_id), 'بر اساس پلتفرم پروژه'],
+       ['هر ساعت', faNum(p.price_hourly_toman), 'تومان'],
+       ['هر ماه', faNum(p.price_monthly_toman), 'تومان (۷۳۰ ساعت)']
+      ].forEach(function (row) {
+        var cell = el('div', 'cost-cell');
+        cell.appendChild(el('span', 'cost-cell-label', esc(row[0])));
+        cell.appendChild(el('span', 'cost-cell-val ltr-block', esc(row[1])));
+        cell.appendChild(el('span', 'cost-cell-unit', esc(row[2])));
+        grid.appendChild(cell);
+      });
+      wrap.appendChild(grid);
+      var live = el('span', 'cost-live-badge');
+      live.innerHTML = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg> قیمت زنده از API لیارا';
+      wrap.appendChild(live);
+      return wrap;
+    }
+    var row = el('div', 'cost-row');
+    row.appendChild(el('span', 'cost-label', 'هزینهٔ تخمینی:'));
+    row.appendChild(el('span', 'cost-val ltr-block', esc(p && p.estimated_cost != null ? p.estimated_cost : '—')));
+    if (p && p.cost_unverified) row.appendChild(el('span', 'badge badge-amber', UNVERIFIED_BADGE));
+    wrap.appendChild(row);
+    return wrap;
+  }
+
   function rPlan(p) {
     store.hasPlan = true;
     if (store.planEl && store.planEl.isConnected) store.planEl.remove(); // replace, never duplicate
@@ -740,11 +853,7 @@
       card.appendChild(ol);
     }
 
-    var costRow = el('div', 'cost-row');
-    costRow.appendChild(el('span', 'cost-label', 'هزینهٔ تخمینی:'));
-    costRow.appendChild(el('span', 'cost-val ltr-block', esc(p.estimated_cost != null ? p.estimated_cost : '—')));
-    if (p.cost_unverified) costRow.appendChild(el('span', 'badge badge-amber', UNVERIFIED_BADGE));
-    card.appendChild(costRow);
+    card.appendChild(costBlock(p));
 
     var envItems = normalizeEnv(p.env_needed);
     if (envItems.length) {
@@ -786,10 +895,10 @@
       act.textContent = String(p.action);
       card.appendChild(act);
     }
-    // Risk tier badge (T4): every action shows its tier + context note.
+    // Risk tier badge: every action shows its tier + context note.
     if (p.risk_tier && p.risk_tier.tier) card.appendChild(tierBadge(p.risk_tier));
     if (p.risk_note_fa) card.appendChild(el('span', 'risk-note muted small', esc(p.risk_note_fa)));
-    // Ranked causes for unscripted failures (T3): quote-only evidence.
+    // Ranked causes for unscripted failures: quote-only evidence.
     if (Array.isArray(p.causes_ranked) && p.causes_ranked.length) {
       var cwrap = el('ul', 'causes-list');
       p.causes_ranked.forEach(function (c, i) {
@@ -812,7 +921,6 @@
     var cls = TIER_BADGE_CLS[rt.tier] || 'badge-zinc';
     var fa = rt.tier_fa || rt.tier || '';
     var b = el('span', 'badge ' + cls + ' tier-badge', esc(fa));
-    // append the numeric level only when the label does not already say it
     if (rt.tier_level && fa.indexOf('سطح') === -1) {
       b.appendChild(el('span', 'tier-level', 'سطح ' + faDigits(rt.tier_level)));
     }
@@ -860,7 +968,7 @@
       row.appendChild(el('span', 'ops-title', esc(sug.action)));
       row.appendChild(tierBadge(sug));
       card.appendChild(row);
-      card.appendChild(el('p', 'muted small', 'اجرای آن فقط با تأیید تو انجام می‌شود (ماتریس ریسک سطح ۲).'));
+      card.appendChild(el('p', 'muted small', 'اجرای آن فقط با تأیید تو انجام می‌شود.'));
     }
     li.appendChild(card);
     timelineEl().appendChild(li);
@@ -869,12 +977,12 @@
 
   function rCareScheduleNote(p) {
     var fa = { daily: 'هر روز', weekly: 'هر هفته', monthly: 'هر ماه' }[p.schedule || ''] || '';
-    addNote(fa ? ('نگهبان پروژه فعال شد — پایش ' + fa + '. اولین بررسی همین حالا انجام می‌شود.') : 'پایش دوره‌ای نگهبان خاموش شد.');
+    addNote(fa ? ('ایجنت ستاره فعال شد — پایش ' + fa + '. اولین بررسی همین حالا انجام می‌شود.') : 'پایش دوره‌ای ایجنت ستاره خاموش شد.');
   }
 
   function rCareReportNote(p) {
     var score = (p.score != null) ? faDigits(p.score) : '؟';
-    addNote('نگهبان گزارش داد: نمرهٔ سلامت ' + score + ' از ۱۰۰ — ' + (p.verdict_fa || ''));
+    addNote('ایجنت ستاره گزارش داد: نمرهٔ سلامت ' + score + ' از ۱۰۰ — ' + (p.verdict_fa || ''));
   }
 
   function rVerify(p) {
@@ -903,14 +1011,14 @@
 
   function rDone() {
     stopSSE();
-    completeStepper(); // stepper: all stages done
+    completeStepper();
     disableInputs(true);
     addNote('کار تمام شد.');
     goReport();
   }
 
   function rError(p) {
-    errorStepper(); // stepper: rose error state on the active stage
+    errorStepper();
     var li = tlItem('tl-error', 'dot-red');
     var card = el('div', 'card error-card');
     card.appendChild(el('span', 'error-label', 'خطا'));
@@ -957,10 +1065,7 @@
   };
 
   /* ----------------------------------------------------------
-   * Presentational helpers (task 4-a) — no state, no behavior.
-   * 1) Pipeline stepper: maps server stage names onto the static
-   *    #stepper markup (done / active / error classes only).
-   * 2) Log-level tinting: purely cosmetic class on log lines.
+   * Stepper (presentational)
    * ---------------------------------------------------------- */
 
   var STAGE_TO_STEP = {
@@ -1013,7 +1118,6 @@
       stepEls[i].classList.add('done');
       stepEls[i].removeAttribute('aria-current');
     }
-    if (stepperEl) stepperEl.classList.add('complete');
   }
 
   function errorStepper() {
@@ -1047,7 +1151,6 @@
     setLevelUI();
     renderRiskBodies();
     api.level(store.sessionId, { level: lvl }).then(function (res) {
-      // sync from server response if it echoes the level
       if (res && (res.level === 'beginner' || res.level === 'expert') && res.level !== store.level) {
         store.level = res.level;
         setLevelUI();
@@ -1077,8 +1180,8 @@
     });
   }
 
-  /** Mid-run Q&A (T15): free question -> ONE llm call on the server -> Q/A pair
-   *  rendered in the timeline (client-side only; answers never enter SSE events). */
+  /** Mid-run Q&A: free question -> ONE LLM call on the server -> Q/A pair
+   *  rendered in the timeline (client-side only; never enters SSE events). */
   function bindAsk() {
     var form = $('#ask-form');
     if (!form || form.dataset.bound) return;
@@ -1135,7 +1238,8 @@
   }
 
   /* ----------------------------------------------------------
-   * Approval modal
+   * Approval modal (cost gate + env values + prepared files)
+   * and the ask_user question modal.
    * ---------------------------------------------------------- */
 
   function normalizeEnv(env) {
@@ -1204,7 +1308,7 @@
     modal.appendChild(title);
     modal.appendChild(el('p', 'muted modal-sub',
       isQuestion ? 'خلبان از روی لاگ‌ها به چیزی نیاز دارد که فقط تو می‌توانی بدهی.'
-                 : 'خلبان پیش از هر کار هزینه‌دار، اجازهٔ تو را می‌گیرد.'));
+                 : 'هیچ کار هزینه‌داری بدون اجازهٔ تو انجام نمی‌شود. هزینه را ببین، تصمیم بگیر.'));
 
     if (isQuestion) {
       modal.appendChild(el('p', 'question-text', String(p.question_fa || '')));
@@ -1242,16 +1346,12 @@
       return;
     }
 
-    var costRow = el('div', 'cost-row');
-    costRow.appendChild(el('span', 'cost-label', 'هزینهٔ تخمینی:'));
-    costRow.appendChild(el('span', 'cost-val ltr-block', esc(p.estimated_cost != null ? p.estimated_cost : '—')));
-    if (p.cost_unverified) costRow.appendChild(el('span', 'badge badge-amber', UNVERIFIED_BADGE));
-    modal.appendChild(costRow);
+    modal.appendChild(costBlock(p));
 
     var envItems = normalizeEnv(p.env_needed);
     if (envItems.length) {
       modal.appendChild(el('h4', 'modal-sec-title', 'متغیرهای محیطی'));
-      modal.appendChild(el('p', 'muted small', 'مقادیر را وارد کن؛ خلبان آن‌ها را فقط برای همین استقرار استفاده می‌کند.'));
+      modal.appendChild(el('p', 'muted small', 'مقادیر را وارد کن؛ فقط برای همین استقرار استفاده می‌شوند و هرگز جایی نمایش یا ذخیره نمی‌شوند.'));
       modal.appendChild(envRowsBlock(p.env_needed));
     }
 
@@ -1283,7 +1383,7 @@
     okBtn.focus();
   }
 
-  /** Answer an ask_user interrupt (T14): a free-text reply for the agent. */
+  /** Answer an ask_user interrupt: a free-text reply for the agent. */
   function sendReply(text, okBtn, noBtn, errBox) {
     errBox.hidden = true;
     okBtn.disabled = true;
@@ -1308,7 +1408,7 @@
     var out = {};
     var inputs = $('#modal').querySelectorAll('.env-input');
     for (var i = 0; i < inputs.length; i++) {
-      out[inputs[i].dataset.key] = inputs[i].value.trim();
+      if (inputs[i].dataset.key) out[inputs[i].dataset.key] = inputs[i].value.trim();
     }
     return out;
   }
@@ -1350,11 +1450,11 @@
     store.pendingApproval = null;
   }
 
-  /** Minimal focus trap so Tab cannot escape the approval dialog. */
+  /** Minimal focus trap so Tab cannot escape the dialog. */
   function wireModalTrap() {
     $('#modal-overlay').addEventListener('keydown', function (ev) {
       if (ev.key !== 'Tab') return;
-      var focusables = $('#modal').querySelectorAll('button, input, summary, a[href]');
+      var focusables = $('#modal').querySelectorAll('button, input, summary, textarea, a[href]');
       if (!focusables.length) return;
       var first = focusables[0];
       var last = focusables[focusables.length - 1];
@@ -1379,20 +1479,24 @@
     renderReport();
     if (store.report && (store.report.url || store.report.live_url)) {
       startMonitorPolling();
-      startCarePolling(); // نگهبان پروژه: وضعیت و گزارش‌های زنده
+      startCarePolling(); // ایجنت ستاره: وضعیت و گزارش‌های زنده
     }
   }
 
   /* ----------------------------------------------------------
-   * Continuous monitoring panel (T6) — poll /monitor on the report screen.
-   * Source labels: liara_api values stay UNVERIFIED-badged until a live read
-   * confirms units; inference is always labelled «استنتاج».
+   * Continuous monitoring panel — poll /monitor on the report screen.
+   * Source labels: liara_api values stay UNVERIFIED-badged until a live
+   * read confirms units; inference is always labelled «استنتاج».
    * ---------------------------------------------------------- */
 
   function startMonitorPolling() {
     if (store.monitorTimer) return;
     renderMonitor(); // immediate first paint
     store.monitorTimer = setInterval(renderMonitor, 15000);
+  }
+
+  function stopMonitorPolling() {
+    if (store.monitorTimer) { clearInterval(store.monitorTimer); store.monitorTimer = null; }
   }
 
   function monitorSourceBadge(sample) {
@@ -1409,8 +1513,8 @@
       var alerting = !!(data && data.alerting);
 
       if (alerting) {
-        var alert = el('div', 'monitor-alert', 'هشدار: سلامت برنامه افت کرده است. پیشنهاد خلبان: ری‌استارت (سطح ۲ — با تأیید تو).');
-        var ab = el('button', 'btn btn-ghost ops-btn', 'ری‌استارت برنامه');
+        var alert = el('div', 'monitor-alert', 'هشدار: سلامت برنامه افت کرده است. پیشنهاد خلبان: ری‌استارت (فقط با تأیید تو).');
+        var ab = el('button', 'btn btn-ghost btn-sm ops-btn', 'ری‌استارت برنامه');
         ab.type = 'button';
         ab.addEventListener('click', function () { openOpsApprovalModal('restart'); });
         alert.appendChild(ab);
@@ -1427,9 +1531,6 @@
       if (s.plan_id) {
         row.appendChild(el('span', 'muted small', 'پلن زنده: '));
         row.appendChild(el('span', 'ltr-block', esc(s.plan_id)));
-      }
-      if (s.source === 'liara_api' && s.metrics) {
-        row.appendChild(el('span', 'muted small', 'متریک از API لیارا (مقیاس مقادیر UNVERIFIED)'));
       }
       box.appendChild(row);
 
@@ -1448,16 +1549,12 @@
     });
   }
 
-  function stopMonitorPolling() {
-    if (store.monitorTimer) { clearInterval(store.monitorTimer); store.monitorTimer = null; }
-  }
-
   /* ----------------------------------------------------------
-   * Care Agent dashboard (نگهبان پروژه) — scheduled guardian.
-   * Polls GET /care every 10s while on the report screen, lets the
-   * user pick daily/weekly/monthly monitoring, shows the care reports
-   * (score, findings with severity, actionable tips) and produces the
-   * copyable "brief" the user can hand to their own agent.
+   * Star Agent (ایجنت ستاره) — the permanent care agent.
+   * Polls GET /care every 10s on the report screen; schedule picker
+   * (daily/weekly/monthly/off), manual check, care reports (score,
+   * findings with severity, actionable tips) and the copyable brief
+   * the user can hand to their own agent.
    * ---------------------------------------------------------- */
 
   var CARE_FA = { daily: 'هر روز', weekly: 'هر هفته', monthly: 'هر ماه', off: 'خاموش', '': 'خاموش' };
@@ -1486,14 +1583,13 @@
     var n = Number(score);
     if (!Number.isFinite(n)) return el('span', 'badge badge-zinc', '—');
     var cls = n >= 80 ? 'badge-emerald' : (n >= 60 ? 'badge-amber' : 'badge-red');
-    var b = el('span', 'badge ' + cls, 'نمرهٔ سلامت: ' + faDigits(n) + ' از ۱۰۰');
-    return b;
+    return el('span', 'badge ' + cls, 'نمرهٔ سلامت: ' + faDigits(n) + ' از ۱۰۰');
   }
 
   var FINDING_SEV = {
-    critical: { label: 'بحرانی', cls: 'badge-red', dot: 'dot-red' },
-    warning:  { label: 'هشدار',  cls: 'badge-amber', dot: 'dot-amber' },
-    info:     { label: 'نکته',   cls: 'badge-zinc', dot: '' }
+    critical: { label: 'بحرانی', cls: 'badge-red' },
+    warning:  { label: 'هشدار',  cls: 'badge-amber' },
+    info:     { label: 'نکته',   cls: 'badge-zinc' }
   };
 
   function careTriggerLabel(t) {
@@ -1521,9 +1617,9 @@
     return faDigits(d) + ' روز بعد';
   }
 
-  function careReportCard(rec, idx, total) {
+  function careReportCard(rec, idx) {
     var li = el('li', 'care-report' + (idx === 0 ? ' care-report-new' : ''));
-    if (idx > 2) li.hidden = true; // older ones behind «بقیهٔ گزارش‌ها»
+    if (idx > 2 && !store.careShowAll) li.hidden = true;
 
     var head = el('div', 'care-report-head');
     head.appendChild(careScoreBadge(rec.score));
@@ -1539,7 +1635,7 @@
         hrow.appendChild(el('span', 'muted small', 'میانگین زمان پاسخ: ' + faDigits(rec.health.avg_ms) + ' میلی‌ثانیه'));
       }
       if (rec.health.worst_ms != null && rec.health.n > 1) {
-        hrow.appendChild(el('span', 'muted small', 'کندترین: ' + faDigits(rec.health.worst_ms)));
+        hrow.appendChild(el('span', 'muted small', 'کندترین: ' + faDigits(rec.health.worst_ms) + 'ms'));
       }
       li.appendChild(hrow);
     }
@@ -1585,13 +1681,14 @@
 
     // ---- header
     var head = el('div', 'care-head');
-    var icon = el('span', 'care-icon', '🛡️');
+    var icon = el('span', 'care-icon',
+      '<svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 3 1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3z"/></svg>');
     icon.setAttribute('aria-hidden', 'true');
     head.appendChild(icon);
     var titles = el('div', 'care-head-titles');
-    titles.appendChild(el('h4', 'sec-title care-title', 'نگهبان پروژه'));
+    titles.appendChild(el('h4', 'sec-title care-title', 'ایجنت ستاره'));
     titles.appendChild(el('p', 'muted small',
-      'مثل یک مشاور بهینه‌سازی، دوره‌ای سایتت را چک می‌کنم — سلامت، سرعت و لاگ‌ها. اگر چیزی افت کند، می‌گویم چرا و چطور درستش کنی.'));
+      'بعد از استقرار می‌مانم و مثل یک کارشناس ارزیاب، دوره‌ای سایتت را چک می‌کنم — سرعت، سلامت و لاگ‌ها. اگر چیزی افت کند می‌گویم چرا و چطور درستش کنی.'));
     head.appendChild(titles);
     if (c.schedule && c.schedule !== 'off') {
       head.appendChild(el('span', 'badge badge-emerald', 'فعال: ' + (CARE_FA[c.schedule] || c.schedule)));
@@ -1604,20 +1701,20 @@
     var pick = el('div', 'care-pick');
     pick.setAttribute('role', 'group');
     pick.setAttribute('aria-label', 'زمان‌بندی پایش');
-    pick.appendChild(el('span', 'sec-inline-label', 'هر چند وقت یک بار چک کنم؟'));
+    pick.appendChild(el('span', 'sec-inline-label', 'هر چند وقت یک بار سایتت را چک کنم؟'));
     var chips = el('div', 'chip-wrap care-chips');
     ['daily', 'weekly', 'monthly'].forEach(function (v) {
       var active = c.schedule === v;
       var b = el('button', 'chip care-chip' + (active ? ' care-chip-on' : ''), CARE_FA[v]);
       b.type = 'button';
       b.setAttribute('aria-pressed', String(active));
-      b.addEventListener('click', function () { setCareSchedule(v, b); });
+      b.addEventListener('click', function () { setCareSchedule(v); });
       chips.appendChild(b);
     });
     var offBtn = el('button', 'chip care-chip care-chip-off' + (!c.schedule ? ' care-chip-on' : ''), 'خاموش');
     offBtn.type = 'button';
     offBtn.setAttribute('aria-pressed', String(!c.schedule));
-    offBtn.addEventListener('click', function () { setCareSchedule('off', offBtn); });
+    offBtn.addEventListener('click', function () { setCareSchedule('off'); });
     chips.appendChild(offBtn);
     pick.appendChild(chips);
     box.appendChild(pick);
@@ -1659,19 +1756,22 @@
     if (!reports.length) {
       listWrap.appendChild(el('p', 'muted small', 'هنوز گزارشی نیست. یک زمان‌بندی انتخاب کن یا «پایش فوری» را بزن — اولین گزارش چند ثانیه بعد می‌آید.'));
     } else {
-      listWrap.appendChild(el('span', 'sec-inline-label', 'گزارش‌های مراقبت'));
+      listWrap.appendChild(el('span', 'sec-inline-label', 'گزارش‌های ایجنت ستاره'));
       var ul = el('ul', 'care-reports');
-      reports.forEach(function (r, i) { ul.appendChild(careReportCard(r, i, reports.length)); });
+      reports.forEach(function (r, i) { ul.appendChild(careReportCard(r, i)); });
       listWrap.appendChild(ul);
       if (reports.length > 3) {
-        var more = el('button', 'btn btn-ghost btn-sm', 'نمایش ' + faDigits(reports.length - 3) + ' گزارش قدیمی‌تر');
+        var more = el('button', 'btn btn-ghost btn-sm', store.careShowAll
+          ? 'نمایش کمتر'
+          : 'نمایش ' + faDigits(reports.length - 3) + ' گزارش قدیمی‌تر');
         more.type = 'button';
         more.addEventListener('click', function () {
-          var hidden = ul.querySelectorAll('li[hidden]');
-          var show = hidden.length > 0;
+          store.careShowAll = !store.careShowAll;
           var items = ul.children;
-          for (var i = 0; i < items.length; i++) { items[i].hidden = show ? false : (i > 2); }
-          more.textContent = show ? 'نمایش گزارش‌های قدیمی‌تر' : 'نمایش ' + faDigits(reports.length - 3) + ' گزارش قدیمی‌تر';
+          for (var i = 0; i < items.length; i++) items[i].hidden = (i > 2) && !store.careShowAll;
+          more.textContent = store.careShowAll
+            ? 'نمایش کمتر'
+            : 'نمایش ' + faDigits(reports.length - 3) + ' گزارش قدیمی‌تر';
         });
         listWrap.appendChild(more);
       }
@@ -1679,11 +1779,10 @@
     box.appendChild(listWrap);
   }
 
-  function setCareSchedule(v, btn) {
+  function setCareSchedule(v) {
     var box = $('#care-box');
     var chips = box ? box.querySelectorAll('.care-chip') : [];
     for (var i = 0; i < chips.length; i++) { chips[i].disabled = true; chips[i].classList.remove('care-chip-on'); }
-    if (btn) btn.classList.add('care-chip-on');
     api.careSet(store.sessionId, { schedule: v }).then(function () {
       // 202 accepted; the first check starts server-side. Optimistic state:
       store.care = store.care || {};
@@ -1697,18 +1796,18 @@
     });
   }
 
-  /** The copyable brief the user hands to their own agent (T-care). */
+  /** The copyable brief the user hands to their own agent. */
   function openBriefModal() {
     var modal = $('#modal');
     modal.innerHTML = '';
     modal.classList.remove('is-approval', 'is-question', 'is-ops');
     modal.classList.add('is-ops');
-    var title = el('h3', 'modal-title', 'خلاصهٔ مراقبت برای ایجنت تو');
+    var title = el('h3', 'modal-title', 'خلاصه برای ایجنت تو');
     title.id = 'modal-title';
     modal.appendChild(title);
     modal.appendChild(el('p', 'muted modal-sub',
       'این متن را کپی کن و به هر ایجنتی که داری بده (چت‌بات، ابزار کدنویسی…) — می‌داند نگهبان این سایت چیست و هر دوره چه چیزهایی را چک کند.'));
-    var pre = el('textarea', 'brief-text ltr-none');
+    var pre = el('textarea', 'brief-text');
     pre.id = 'brief-text';
     pre.readOnly = true;
     pre.rows = 12;
@@ -1763,15 +1862,18 @@
     } catch (e) { /* best-effort */ }
   }
 
+  /* ----------------------------------------------------------
+   * Report rendering
+   * ---------------------------------------------------------- */
 
   function reportStatus(r) {
     if (store.cancelled) return { label: 'لغو شد', cls: 'st-off' };
     var s = String(r.status || '').toLowerCase();
     if (/decision|approval|await|need|confirm/.test(s)) return { label: 'نیاز به تصمیم تو', cls: 'st-warn' };
     if (/cancel|abort|stop/.test(s)) return { label: 'لغو شد', cls: 'st-off' };
-    if (/success|done|deployed|live|complete|finish|ok/.test(s)) return { label: 'موفق', cls: 'st-ok' };
+    if (/success|done|deployed|live|complete|finish|ok/.test(s)) return { label: 'موفق — سایتت زنده است', cls: 'st-ok' };
     var url = r.url || r.live_url || (r.deployment && r.deployment.url);
-    if (url) return { label: 'موفق', cls: 'st-ok' };
+    if (url) return { label: 'موفق — سایتت زنده است', cls: 'st-ok' };
     if (!r.status) return { label: 'نیاز به تصمیم تو', cls: 'st-warn' };
     return { label: 'نیاز به تصمیم تو', cls: 'st-warn' };
   }
@@ -1791,13 +1893,13 @@
     return ul;
   }
 
-  /* Post-deploy operations section (T4) — the three-tier legend + gated buttons. */
+  /* Post-deploy operations section — the three-tier legend + gated buttons. */
   function opsSection() {
     var sec = sectionCard('عملیات بعد از استقرار');
     var legend = el('div', 'chip-wrap risk-legend');
     legend.appendChild(tierBadge({ tier: 'auto', tier_fa: 'خودکار — فقط خواندنی', tier_level: 1 }));
     legend.appendChild(tierBadge({ tier: 'approval', tier_fa: 'نیازمند تأیید تو', tier_level: 2 }));
-    legend.appendChild(tierBadge({ tier: 'forbidden', tier_fa: 'فقط دستی — ایجنت هرگز اجرا نمی‌کند', tier_level: 3 }));
+    legend.appendChild(tierBadge({ tier: 'forbidden', tier_fa: 'فقط دستی — هرگز اجرا نمی‌شود', tier_level: 3 }));
     sec.appendChild(legend);
     sec.appendChild(el('p', 'muted small',
       'خواندن وضعیت/لاگ/مصرف خودکار است؛ ری‌استارت و تغییر پلن فقط با تأیید تو؛ حذف اپ یا دیسک هرگز توسط خلبان انجام نمی‌شود.'));
@@ -1848,16 +1950,16 @@
         closeModal();
         // The report screen has no live timeline — show the result in the ops panel.
         var box = $('#monitor-box');
-        var text = (action === 'restart' ? 'ری‌استارت: ' : 'عملیات: ')
+        var text2 = (action === 'restart' ? 'ری‌استارت: ' : 'عملیات: ')
           + ((res && (res.message_fa || res.message)) ? (res.message_fa || res.message) : 'ثبت شد.');
         if (box) {
           box.innerHTML = '';
           var note = el('div', 'monitor-row ops-result');
           note.appendChild(el('span', 'badge badge-emerald', 'انجام شد'));
-          note.appendChild(el('span', 'ltr-block', esc(text)));
+          note.appendChild(el('span', 'ltr-block', esc(text2)));
           box.appendChild(note);
         } else {
-          addNote(text);
+          addNote(text2);
         }
       }).catch(function (e) {
         okBtn.disabled = false; noBtn.disabled = false;
@@ -1892,7 +1994,7 @@
     // Live URL
     var url = r.url || r.live_url || (r.deployment && r.deployment.url);
     if (url) {
-      var secUrl = sectionCard('آدرس زنده');
+      var secUrl = sectionCard('آدرس زندهٔ سایتت');
       var box = el('div', 'url-box');
       var a = el('a', 'live-link ltr-block');
       a.href = url;
@@ -1903,10 +2005,10 @@
       secUrl.appendChild(box);
       root.appendChild(secUrl);
 
-      // Post-deploy operations (T4): each action shows its risk tier.
+      // Post-deploy operations: each action shows its risk tier.
       root.appendChild(opsSection());
 
-      // Care Agent dashboard (نگهبان پروژه) — scheduled guardian + reports.
+      // Star Agent (ایجنت ستاره) dashboard.
       root.appendChild(careSection());
       renderCare(); // initial paint (poll keeps it fresh)
     }
@@ -1971,20 +2073,13 @@
     }
 
     // Cost
-    var cost = (r.estimated_cost != null) ? r.estimated_cost
-      : (r.cost != null) ? r.cost
-      : (r.cost_estimate != null) ? r.cost_estimate : null;
-    if (cost != null || r.cost_unverified) {
+    if (r.price_hourly_toman != null || r.estimated_cost != null || r.cost_unverified) {
       var secCost = sectionCard('هزینه');
-      var costRow = el('div', 'cost-row');
-      costRow.appendChild(el('span', 'cost-label', 'هزینهٔ تخمینی:'));
-      costRow.appendChild(el('span', 'cost-val ltr-block', esc(cost != null ? cost : '—')));
-      if (r.cost_unverified) costRow.appendChild(el('span', 'badge badge-amber', UNVERIFIED_BADGE));
-      secCost.appendChild(costRow);
+      secCost.appendChild(costBlock(r));
       root.appendChild(secCost);
     }
 
-    // Beginner "what you learned" checklist (emerald card)
+    // Beginner "what you learned" checklist
     if (Array.isArray(r.learned) && r.learned.length) {
       var secLearn = el('section', 'card report-sec learned-card');
       secLearn.appendChild(el('h4', 'sec-title learned-title', 'چه چیزهایی یاد گرفتی'));
@@ -2018,8 +2113,9 @@
     $('#btn-new').addEventListener('click', function () { location.reload(); });
     $('#btn-restart').addEventListener('click', function () { location.reload(); });
 
-    updateDemoBadge();
+    updateSampleBadge();
     showScreen('upload');
+    loadAccount(); // real Liara account status in the header
   }
 
   if (document.readyState === 'loading') {

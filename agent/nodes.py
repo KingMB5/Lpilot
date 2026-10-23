@@ -9,6 +9,7 @@ app emitter, and nodes never place them in events in the first place.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -88,6 +89,43 @@ def explain_risks(state: dict, deps: Deps) -> dict:
     return {"explanations": out, "status": "running"}
 
 
+def _real_plan_price(deps: "Deps") -> dict | None:
+    """قیمت واقعی پلن از کاتالوگ زندهٔ لیارا (VERIFIED: plans_catalog_at_v1_me —
+    plans.projects.price تومان/ساعت). فقط برای جلسه‌های واقعی (deployer واقعی
+    plans_catalog دارد؛ MockDeployer ندارد). None = قیمت واقعی در دسترس نبود."""
+    deployer = deps.deployer
+    if deployer is None or not hasattr(deployer, "plans_catalog"):
+        return None
+    try:
+        catalog = deployer.plans_catalog()
+    except Exception:  # noqa: BLE001 — قیمت نباید مسیر پلن را بشکند
+        return None
+    if not isinstance(catalog, dict):
+        return None
+    wanted = (os.getenv("LIARA_PLAN_ID", "small-g2") or "").strip()
+    projects = catalog.get("projects")
+    # VERIFIED live 2026-10-23: projects is a DICT keyed by planID; tolerate a
+    # list shape defensively anyway.
+    entries = (projects.get(wanted) if isinstance(projects, dict) else None)
+    if entries is None and isinstance(projects, list):
+        entries = next((p for p in projects
+                        if isinstance(p, dict) and str(p.get("planID", "")) == wanted), None)
+    if not isinstance(entries, dict):
+        return None
+    price = entries.get("price")
+    try:
+        hourly = float(price)
+    except (TypeError, ValueError):
+        return None
+    monthly = entries.get("displayPrice")
+    try:
+        monthly = float(monthly)
+    except (TypeError, ValueError):
+        monthly = round(hourly * 730)
+    return {"plan_id": wanted, "price_hourly_toman": hourly,
+            "price_monthly_toman": monthly}
+
+
 def make_plan(state: dict, deps: Deps) -> dict:
     if _cancelled(state, deps):
         return {"status": "cancelled"}
@@ -115,6 +153,19 @@ def make_plan(state: dict, deps: Deps) -> dict:
     plan["prepared_files"] = fallback_plan["prepared_files"]
     plan["disks"] = fallback_plan["disks"]
     plan.setdefault("cost_unverified", True)
+
+    # REAL cost (live catalog): for real sessions, replace the UNVERIFIED cost
+    # line with the actual per-hour plan price read from the Liara API.
+    price = _real_plan_price(deps)
+    if price is not None:
+        plan.update(price)
+        plan["cost_unverified"] = False
+        plan["cost_source"] = "liara_api_live"
+        plan["estimated_cost"] = (
+            f"پلن {price['plan_id']} — {price['price_hourly_toman']:g} تومان در ساعت، "
+            f"حدود {price['price_monthly_toman']:,} تومان در ماه"
+        )
+
     deps.emit("plan", plan)
     return _decide(state, {"plan": plan, "status": "running"}, "make_plan: deterministic fields enforced")
 
@@ -128,6 +179,10 @@ def await_approval(state: dict, deps: Deps) -> dict:
     payload = {
         "estimated_cost": plan.get("estimated_cost"),
         "cost_unverified": plan.get("cost_unverified", True),
+        "cost_source": plan.get("cost_source"),
+        "plan_id": plan.get("plan_id"),
+        "price_hourly_toman": plan.get("price_hourly_toman"),
+        "price_monthly_toman": plan.get("price_monthly_toman"),
         "env_needed": plan.get("env_needed", []),
         "prepared_files": plan.get("prepared_files", []),
     }

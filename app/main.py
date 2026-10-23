@@ -15,6 +15,7 @@ import time
 import zipfile
 import pathlib
 
+import httpx
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -22,6 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from agent.assessment import assess, load as load_assessment
 from agent.risk import RiskDenied, classify, gate, safe_action
 from app.config import load_defaults
+from app.github import GitHubError, intake as github_intake, parse_repo as github_parse_repo
 from app.runner import ensure_llm, load_concepts, resume as runner_resume, start as runner_start
 from app.sessions import STORE, Session
 from app.zipsafe import ZipSafetyError, extract_zip, project_root_of
@@ -114,7 +116,7 @@ def assessment():
 # ---------------------------------------------------------------- sessions
 
 @app.post("/api/upload")
-async def upload(file: UploadFile = File(...)):
+async def upload(file: UploadFile = File(...)):  # noqa: N803 — multipart field name
     cap_mb = int(load_defaults().get("limits", {}).get("max_upload_mb", 25))
     size = 0
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
@@ -138,6 +140,74 @@ async def upload(file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="file is not a valid zip") from e
     finally:
         os.unlink(tmp.name)
+
+
+@app.post("/api/github")
+def github(body: dict):
+    """دریافت پروژه از گیت‌هاب: tarball ریپو (عمومی یا خصوصی با توکن) دانلود
+    و امن استخراج می‌شود؛ بعد مسیر مثل آپلود zip جلو می‌رود.
+    توکن فقط از env خوانده می‌شود؛ هرگز در پاسخ/لاگ/رویداد برنمی‌گردد."""
+    url = str(body.get("url", ""))
+    try:
+        owner, repo, _branch = github_parse_repo(url)
+        dest = github_intake(url)
+    except GitHubError as e:
+        raise HTTPException(status_code=e.status, detail=e.message_fa) from e
+    s = STORE.create(dest, demo=os.getenv("DEMO_MODE", "") == "1")
+    s.add_event("log", {"text": f"repo fetched: {owner}/{repo}"})
+    return {"session_id": s.id, "demo": s.demo, "repo": f"{owner}/{repo}"}
+
+
+# ---------------------------------------------------------------- account (real, read-only)
+
+_ACCT_CACHE: dict = {"ts": 0.0, "data": None}
+
+
+@app.get("/api/account")
+def account():
+    """وضعیت واقعی حساب لیارا برای ویجت هدر — فقط GETهای read-only با کش ۵ دقیقه‌ای.
+    بدون توکن در پاسخ؛ خطاها فروخورده می‌شوند (ویجت فقط مخفی می‌شود)."""
+    token = (os.getenv("LIARA_API_TOKEN", "") or "").strip()
+    if not token:
+        return {"connected": False}
+    now = time.time()
+    cached = _ACCT_CACHE.get("data")
+    if isinstance(cached, dict) and now - float(_ACCT_CACHE.get("ts", 0.0)) < 300:
+        return cached
+    out: dict = {"connected": True}
+    team = (os.getenv("LIARA_TEAM_ID", "") or "").strip()
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        with httpx.Client(base_url="https://api.liara.ir", timeout=15.0,
+                          headers=headers) as c:
+            params = {"teamID": team} if team else None
+            if team:
+                r = c.get("/v1/billing", params=params)
+                if r.status_code == 200:
+                    # VERIFIED 2026-10-23: with teamID the response carries the
+                    # TEAM credit under team.balance (user.balance stays 0).
+                    bal = ((r.json() or {}).get("team") or {}).get("balance")
+                    if isinstance(bal, (int, float)):
+                        out["balance_toman"] = round(float(bal))
+            r2 = c.get("/v1/me", params=params)
+            if r2.status_code == 200:
+                plans = ((r2.json() or {}).get("plans") or {})
+                wanted = (os.getenv("LIARA_PLAN_ID", "small-g2") or "").strip()
+                projs = plans.get("projects")
+                entry = projs.get(wanted) if isinstance(projs, dict) else None
+                if isinstance(entry, dict):
+                    price = entry.get("price")
+                    if isinstance(price, (int, float)):
+                        out["default_plan"] = wanted
+                        out["plan_price_hourly_toman"] = float(price)
+                    dp = entry.get("displayPrice")
+                    if isinstance(dp, (int, float)):
+                        out["plan_price_monthly_toman"] = float(dp)
+    except httpx.HTTPError:
+        pass  # شبکه‌ی لیارا در دسترس نیست — ویجت «متصل» نشان داده نمی‌شود
+    _ACCT_CACHE["data"] = out
+    _ACCT_CACHE["ts"] = now
+    return out
 
 
 @app.post("/api/sessions/demo")
