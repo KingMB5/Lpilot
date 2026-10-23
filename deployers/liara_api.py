@@ -93,6 +93,7 @@ class LiaraApiDeployer:
             self.disk_size_gb = None
         # Team context + create-time extras (VERIFIED live 2026-10-22, see module doc).
         self.team_id = (team_id if team_id is not None else os.getenv("LIARA_TEAM_ID", "")).strip()
+        self._team_probe_done = bool(self.team_id)
         self.network_id = (network_id if network_id is not None else os.getenv("LIARA_NETWORK_ID", "")).strip()
         self.bundle_plan_id = (bundle_plan_id if bundle_plan_id is not None else os.getenv("LIARA_BUNDLE_PLAN_ID", "basic")).strip()
         self.http_timeout_s = float(os.getenv("LIARA_HTTP_TIMEOUT_S", str(d.get("http_timeout_s", 30))))
@@ -113,11 +114,37 @@ class LiaraApiDeployer:
         # VERIFIED (paas_api_auth): "Authorization: Bearer <token>"
         return {"Authorization": f"Bearer {self._api_token}"}
 
+    def _ensure_team(self) -> None:
+        """LIVE FIX 2026-10-24 (E2E on lp-dcded0): BYO-token sessions carry no
+        LIARA_TEAM_ID env — every request ran teamless, so the USER'S team
+        networks were invisible and new-app creation failed missing_network
+        even though the team had one. Discover the token's default team once,
+        lazily (same default-team semantics as the official CLI). The id never
+        appears in logs; probe failure degrades honestly, never crashes."""
+        if self.team_id or self._team_probe_done or not self._api_token:
+            return
+        self._team_probe_done = True  # set BEFORE the probe call (no recursion)
+        try:
+            resp = self._request("GET", "/v2/teams")
+            if resp.status_code == 200:
+                teams = (resp.json() or {}).get("teams") or []
+                for t in teams if isinstance(teams, list) else []:
+                    tid = str((t or {}).get("id") or (t or {}).get("_id") or "").strip()
+                    if tid:
+                        self.team_id = tid
+                        self._log("team context auto-discovered from token (id ***)")
+                        return
+            self._log(f"team auto-discovery -> http {resp.status_code} (continuing teamless)")
+        except httpx.HTTPError:
+            self._log("team auto-discovery failed (continuing teamless)")
+
     def _request(self, method: str, path: str, *, json_body: dict | None = None,
                  files: dict | None = None, data: dict | None = None,
                  params: dict | None = None) -> httpx.Response:
         # VERIFIED live 2026-10-22: team context is a teamID QUERY param on every
         # request (mirrors the official CLI's setGotConfig searchParams hook).
+        if not self.team_id:
+            self._ensure_team()
         if self.team_id:
             params = {"teamID": self.team_id, **(params or {})}
         last_exc: Exception | None = None
