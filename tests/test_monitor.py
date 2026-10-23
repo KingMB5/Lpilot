@@ -34,6 +34,11 @@ def deployer(**kw) -> LiaraApiDeployer:
     kw.setdefault("api_token", TOKEN)
     kw.setdefault("backoff_base", 0)
     kw.setdefault("sleep", lambda _s: None)
+    # LIVE 2026-10-24: tokened deployers lazily probe GET /v2/teams once (team
+    # auto-discovery, mirrors the CLI default-team). Mock it so each test's
+    # own routes stay the focus of the assertion.
+    respx.get(f"{BASE}/v2/teams").mock(
+        return_value=httpx.Response(200, json={"teams": [{"id": "team-auto"}]}))
     d = LiaraApiDeployer(**kw)
     d._app_name = "my-app"  # simulate a completed deploy
     return d
