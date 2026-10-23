@@ -591,3 +591,31 @@ Stage Summary:
 - BLOCKER (needs operator): re-send 3 credentials — GH PAT (GitHub is ~15 commits behind:
   the whole real-run epic is unpushed), Liara token + BoxAPI key (for the live video recording).
 - Video is the remaining hard deliverable; script at docs/DEMO_SCRIPT.md is ready.
+
+---
+Task ID: 7-a
+Agent: Z.ai Code (main)
+Task: Credential re-delivery, free-only verification, GitHub history PII purge
+
+Work Log:
+- Operator re-sent all 3 credentials after sandbox restart; saved to /tmp/lp.env (0600, repo-external).
+- Operator directives honored: repo stays PRIVATE (operator flips it public tonight 22:00 Tehran),
+  repo renamed to KingMB5/Lpilot by operator, ZERO wasteful Liara spend this session.
+- Free-only Liara checks (GET): /v2/teams -> team 6acedbd5a0bbd1de4118c994 ("لیارا");
+  /v1/billing?teamID= -> team balance 1,995,652.6 Toman (matches operator screenshot);
+  plans.projects -> 15 available iran plans, ir-small = 1,319.44 Toman/h. projects: [] (no apps).
+- BoxAPI single PING (gpt-5.4-mini): PONG, 17 tokens, cost $0.0000362. Key healthy for the video.
+- GitHub: pushed full history (61 commits incl. real-run epic + evidence) to KingMB5/Lpilot main;
+  topics intact (10); remote URL kept credential-free (PAT used inline only, never persisted).
+- PII INCIDENT FOUND + FIXED: commit e95233f embedded the raw GET /v1/me evidence blob into
+  docs/VERIFIED_MATRIX.md line 119 — containing operator's national code, phone, email, fullname;
+  userID also in worklog. Full-history scan: no secrets ever committed (JWT/box/ghp all zero).
+  Ran git-filter-repo --replace-text (5 PII strings -> [REDACTED-PII]/[REDACTED-USERID]) across
+  all 61 commits, force-pushed. Post-rewrite scan: 0 hits in every commit; remote verified via API
+  (main=2fcd679, VERIFIED_MATRIX.md on GitHub clean).
+
+Stage Summary:
+- Repo KingMB5/Lpilot: fully synced, PII-free in HEAD AND history, still PRIVATE until 22:00 Tehran.
+- Credit protection plan: no Liara app creation this session; single product-driven deploy only
+  during video recording (ir-small ~1,319 Toman/h), app deleted right after.
+- Remaining deliverable: the 5-min video (docs/DEMO_SCRIPT.md ready; offline rehearsal PASS).
