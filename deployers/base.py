@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import uuid
 from typing import Any, Protocol
 
 
@@ -41,12 +42,15 @@ def make_deploy_config(inspection: dict, plan: dict, approvals: dict,
     env.update(plan.get("env_fixes") or {})
     start_command = plan.get("start_command") or inspection.get("start_command")
     cfg = {
-        "app_name": plan.get("app_name") or "liarapilot-app",
+        # Unique per deployment: concurrent users must never overwrite each
+        # other's app on the shared Liara account (each deploy = own app+URL).
+        "app_name": plan.get("app_name") or ("lp-" + uuid.uuid4().hex[:6]),
         "platform": plan.get("platform") or inspection.get("platform"),
         "port": plan.get("port"),
         "env": env,
         "required_env": list(inspection.get("env_vars_required") or []),
         "prepared_files": list(plan.get("prepared_files") or []),
+        "drop_files": list(plan.get("drop_files") or []),
         "disks": list(plan.get("disks") or []),
         "start_command": start_command,
         "project_dir": project_dir,

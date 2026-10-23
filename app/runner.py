@@ -132,7 +132,15 @@ def _run(session: Session, resume_with: dict | None) -> None:
         return
     try:
         if session.graph is None:
-            session.graph = build_graph(build_deps(session))
+            # The checkpointer lives on the SESSION (not inside build_graph) so a
+            # deployer rebind (user token arriving mid-run) can recompile the
+            # graph against the SAME checkpoint state without losing the
+            # pending interrupt.
+            if session.checkpointer is None:
+                from langgraph.checkpoint.memory import InMemorySaver
+
+                session.checkpointer = InMemorySaver()
+            session.graph = build_graph(build_deps(session), checkpointer=session.checkpointer)
             session.thread_cfg = {"configurable": {"thread_id": session.id}}
         if resume_with is None:
             out = session.graph.invoke(
@@ -174,6 +182,24 @@ def _run(session: Session, resume_with: dict | None) -> None:
         traceback.print_exc()
     finally:
         session.release_run()
+
+
+def rebind_deployer(session: Session) -> None:
+    """Rebuild the deployer + graph AFTER the user's own Liara token arrives
+    (POST /approve carries liara_token), so the actual deploy/fix/verify legs
+    run against the USER'S account — never the operator's.
+
+    The graph is recompiled against the session's existing checkpointer, so the
+    pending interrupt state survives the rebuild. Safe to call before
+    runner_resume(); it is a no-op while a run thread is active (that thread
+    re-enters _run, which builds the graph lazily anyway)."""
+    if session.demo or not session.liara_token:
+        return  # demo stays offline by construction; nothing to rebind
+    from deployers import make_deployer
+
+    session.deployer = make_deployer(session)
+    if session.graph is not None and session.checkpointer is not None:
+        session.graph = build_graph(build_deps(session), checkpointer=session.checkpointer)
 
 
 def start(session: Session) -> bool:

@@ -96,6 +96,7 @@
     upload: function (fd) { return req('POST', '/api/upload', fd); },
     github: function (body) { return req('POST', '/api/github', body); },
     account: function () { return req('GET', '/api/account'); },
+    accountCheck: function (body) { return req('POST', '/api/account/check', body); },
     demo: function (body) { return req('POST', '/api/sessions/demo', body); },
     assessment: function () { return req('GET', '/api/assessment'); },
     answers: function (id, body) { return req('POST', '/api/sessions/' + encodeURIComponent(id) + '/answers', body); },
@@ -188,6 +189,7 @@
   function loadAccount() {
     api.account().then(function (a) {
       var chip = $('#account-chip');
+      store.account = a || null;
       if (!a || a.connected !== true) { chip.hidden = true; return; }
       var parts = ['لیارا · متصل'];
       if (a.balance_toman != null) parts.push('موجودی ' + faMoney(a.balance_toman));
@@ -1293,6 +1295,136 @@
     return wrap;
   }
 
+  /* ----------------------------------------------------------
+   * Liara account connect — the user's OWN token, checked live.
+   * The token lives in RAM only (store.liaraToken) and travels
+   * with the approve call so the deploy runs on the user's own
+   * account. Nothing is ever echoed back.
+   * ---------------------------------------------------------- */
+
+  function invoiceBlock(a) {
+    var wrap = el('div', 'cost-grid');
+    var rows = [
+      ['پلن پیشنهادی', String(a.default_plan || '—'), 'بر اساس پلتفرم پروژه'],
+      ['هر ساعت', a.plan_price_hourly_toman != null ? faNum(a.plan_price_hourly_toman) : '—', 'تومان'],
+      ['هر ماه', a.plan_price_monthly_toman != null ? faNum(a.plan_price_monthly_toman) : '—', 'تومان (۷۳۰ ساعت)']
+    ];
+    rows.forEach(function (row) {
+      var cell = el('div', 'cost-cell');
+      cell.appendChild(el('span', 'cost-cell-label', esc(row[0])));
+      cell.appendChild(el('span', 'cost-cell-val ltr-block', esc(row[1])));
+      cell.appendChild(el('span', 'cost-cell-unit', esc(row[2])));
+      wrap.appendChild(cell);
+    });
+    if (a.balance_toman != null && a.plan_price_hourly_toman) {
+      var hours = a.balance_toman / a.plan_price_hourly_toman;
+      var note;
+      if (hours >= 720) note = 'موجودی تو برای بیش از ' + faNum(Math.floor(hours / 720)) + ' ماه روشن‌ماندن این پلن کافی است.';
+      else if (hours >= 48) note = 'موجودی تو برای حدود ' + faNum(Math.floor(hours / 24)) + ' روز روشن‌ماندن این پلن کافی است.';
+      else if (hours >= 24) note = 'موجودی تو برای حدود ' + faNum(Math.floor(hours)) + ' ساعت کار با این پلن کافی است — بهتر است شارژ کنی.';
+      else {
+        note = 'موجودی برای ۲۴ ساعت روشن‌ماندن کافی نیست — اول از پنل لیارا اعتبار شارژ کن.';
+        wrap.classList.add('is-low');
+      }
+      wrap.appendChild(el('p', 'cost-note' + (wrap.classList.contains('is-low') ? ' cost-note-warn' : ''), note));
+    }
+    return wrap;
+  }
+
+  function liaraAccountSection() {
+    var wrap = el('div', 'acct-connect');
+    wrap.appendChild(el('h4', 'modal-sec-title', 'اتصال حساب لیارا'));
+    wrap.appendChild(el('p', 'muted small',
+      'استقرار روی حسابِ خودِ تو ساخته می‌شود و هزینه از اعتبار حسابِ تو کم می‌شود. توکن API لیارای خودت را بده:'));
+
+    var steps = el('ol', 'acct-steps');
+    [
+      ['console.liara.ir', 'باز کن — ثبت‌نام رایگان است.'],
+      ['از منوی «API»', 'یک توکن جدید بساز و کپی کن.'],
+      ['اعتبار', 'مطمئن شو حساب تو شارژ شده باشد.']
+    ].forEach(function (t, i) {
+      var li = el('li', 'acct-step');
+      li.appendChild(el('span', 'acct-step-num', faDigits(i + 1)));
+      li.appendChild(el('span', 'acct-step-text', ' '));
+      var b = el('b', 'ltr-block-inline', t[0]);
+      li.appendChild(b);
+      li.appendChild(document.createTextNode(' ' + t[1]));
+      steps.appendChild(li);
+    });
+    wrap.appendChild(steps);
+
+    var row = el('div', 'acct-row');
+    var input = el('input', 'env-input acct-token');
+    input.type = 'password';
+    input.dir = 'ltr';
+    input.placeholder = 'توکن API لیارا (eyJ…)';
+    input.autocomplete = 'off';
+    input.spellcheck = false;
+    input.setAttribute('aria-label', 'توکن API لیارا');
+    var btn = el('button', 'btn btn-ghost btn-sm acct-check', 'بررسی حساب');
+    btn.type = 'button';
+    row.appendChild(input);
+    row.appendChild(btn);
+    wrap.appendChild(row);
+
+    if (store.account && store.account.connected === true) {
+      wrap.appendChild(el('p', 'muted small acct-hint',
+        'بدون توکن، استقرار از حساب پیش‌فرضِ سرویس انجام می‌شود — با توکن، همه‌چیز مال حساب خودت می‌شود.'));
+    } else {
+      wrap.appendChild(el('p', 'muted small acct-hint acct-hint-warn',
+        'برای استقرار واقعی، توکن حساب خودت را وارد و بررسی کن.'));
+    }
+
+    var out = el('div', 'acct-result');
+    out.hidden = true;
+    wrap.appendChild(out);
+
+    var aerr = el('div', 'error-box');
+    aerr.hidden = true;
+    aerr.setAttribute('role', 'alert');
+    wrap.appendChild(aerr);
+
+    btn.addEventListener('click', function () {
+      var tok = input.value.trim();
+      aerr.hidden = true;
+      out.hidden = true;
+      if (tok.length < 20) {
+        aerr.textContent = 'توکن خیلی کوتاه است — توکن کامل را از کنسول لیارا کپی کن.';
+        aerr.hidden = false;
+        return;
+      }
+      btn.disabled = true;
+      btn.textContent = 'در حال بررسی…';
+      api.accountCheck({ token: tok }).then(function (a) {
+        btn.disabled = false;
+        btn.textContent = 'بررسی حساب';
+        store.liaraToken = tok;
+        store.userAccount = a || null;
+        out.innerHTML = '';
+        var okrow = el('div', 'acct-okrow');
+        okrow.appendChild(el('span', 'badge badge-emerald',
+          '✓ حساب متصل' + (a && a.team_name ? ' — تیم «' + a.team_name + '»' : '')));
+        if (a && a.apps_count != null) {
+          okrow.appendChild(el('span', 'muted small', faNum(a.apps_count) + ' برنامه در حساب تو'));
+        }
+        out.appendChild(okrow);
+        if (a && a.default_plan && a.plan_price_hourly_toman != null) {
+          out.appendChild(el('p', 'sec-inline-label', 'فاکتور استقرار — با قیمت زنده از حساب تو'));
+          out.appendChild(invoiceBlock(a));
+        }
+        out.hidden = false;
+      }).catch(function (e) {
+        btn.disabled = false;
+        btn.textContent = 'بررسی حساب';
+        store.liaraToken = '';
+        store.userAccount = null;
+        aerr.textContent = (e && e.detail) ? String(e.detail) : 'بررسی حساب ناموفق بود — دوباره تلاش کن.';
+        aerr.hidden = false;
+      });
+    });
+    return wrap;
+  }
+
   function openApprovalModal(p) {
     p = p || {};
     store.pendingApproval = p;
@@ -1346,7 +1478,10 @@
       return;
     }
 
+    modal.appendChild(el('h4', 'modal-sec-title', 'فاکتور استقرار'));
     modal.appendChild(costBlock(p));
+
+    modal.appendChild(liaraAccountSection());
 
     var envItems = normalizeEnv(p.env_needed);
     if (envItems.length) {
@@ -1422,6 +1557,9 @@
     var body = approved
       ? { approved: true, cost_ok: true, env_values: collectEnvValues() }
       : { approved: false };
+    // The user's own Liara token (checked in the modal) rides along so the
+    // deployer rebinds to the USER'S account — never the service default.
+    if (approved && store.liaraToken) body.liara_token = store.liaraToken;
     api.approve(store.sessionId, body).then(function () {
       closeModal();
       if (approved) {
@@ -1479,7 +1617,7 @@
     renderReport();
     if (store.report && (store.report.url || store.report.live_url)) {
       startMonitorPolling();
-      startCarePolling(); // ایجنت ستاره: وضعیت و گزارش‌های زنده
+      startCarePolling(); // استارت ایجنت: وضعیت و گزارش‌های زنده
     }
   }
 
@@ -1686,7 +1824,7 @@
     icon.setAttribute('aria-hidden', 'true');
     head.appendChild(icon);
     var titles = el('div', 'care-head-titles');
-    titles.appendChild(el('h4', 'sec-title care-title', 'ایجنت ستاره'));
+    titles.appendChild(el('h4', 'sec-title care-title', 'استارت ایجنت'));
     titles.appendChild(el('p', 'muted small',
       'بعد از استقرار می‌مانم و مثل یک کارشناس ارزیاب، دوره‌ای سایتت را چک می‌کنم — سرعت، سلامت و لاگ‌ها. اگر چیزی افت کند می‌گویم چرا و چطور درستش کنی.'));
     head.appendChild(titles);
@@ -1756,7 +1894,7 @@
     if (!reports.length) {
       listWrap.appendChild(el('p', 'muted small', 'هنوز گزارشی نیست. یک زمان‌بندی انتخاب کن یا «پایش فوری» را بزن — اولین گزارش چند ثانیه بعد می‌آید.'));
     } else {
-      listWrap.appendChild(el('span', 'sec-inline-label', 'گزارش‌های ایجنت ستاره'));
+      listWrap.appendChild(el('span', 'sec-inline-label', 'گزارش‌های استارت ایجنت'));
       var ul = el('ul', 'care-reports');
       reports.forEach(function (r, i) { ul.appendChild(careReportCard(r, i)); });
       listWrap.appendChild(ul);

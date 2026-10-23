@@ -391,7 +391,8 @@ class LiaraApiDeployer:
     def _upload_sources(self, app: str, config: dict) -> dict | None:
         try:
             data = build_source_zip(str(config.get("project_dir") or ""),
-                                    config.get("prepared_files") or [])
+                                    config.get("prepared_files") or [],
+                                    extra_exclude=list(config.get("drop_files") or []))
         except (FileNotFoundError, ValueError) as e:
             return {"ok": False, "kind": "unknown", "message": f"source zip failed: {e}",
                     "logs": list(self._logs)}
@@ -422,13 +423,22 @@ class LiaraApiDeployer:
         # arrays, envs/platformConfig objects, build.cache; gitInfo must be
         # omitted (null is rejected). App envs travel via update-envs, so the
         # release carries an empty envs map.
+        # VERIFIED live 2026-10-24 (python 502 mystery): the builder IGNORES a
+        # liara.json inside the archive — platform config (including `args`,
+        # the ONLY way a python buildpack app gets its real start command; the
+        # default is `python3 main.py`) must travel in THIS release body, same
+        # as the official CLI does (it reads liara.json locally and forwards it).
+        args: list[str] = []
+        start_cmd = str(config.get("start_command") or "").strip()
+        if str(config.get("platform") or "").lower() == "python" and start_cmd:
+            args = [start_cmd]
         body = {"sourceID": self._last_source_id,
                 "port": config.get("port"),
                 "type": config.get("platform") or "node",
                 "message": "deployed by LiaraPilot",
                 "build": {"cache": True},
-                "cron": [], "args": [], "disks": [], "envs": {}, "platformConfig": {}}
-        self._log(f"create release: port={body['port']} type={body['type']}")
+                "cron": [], "args": args, "disks": [], "envs": {}, "platformConfig": {}}
+        self._log(f"create release: port={body['port']} type={body['type']} args={len(args)}")
         resp = self._request("POST", f"/v2/projects/{app}/releases", json_body=body)
         if resp.status_code in (200, 201):
             rid = str((resp.json() or {}).get("releaseID", ""))

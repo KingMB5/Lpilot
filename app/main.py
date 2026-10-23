@@ -30,7 +30,29 @@ from app.zipsafe import ZipSafetyError, extract_zip, project_root_of
 from llm.ask import answer_question
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-UPLOAD_ROOT = ROOT / "data" / "uploads"
+
+
+def _resolve_upload_root() -> pathlib.Path:
+    """Prefer data/uploads inside the app dir, but Liara containers can run
+    with a READ-ONLY root filesystem (live discovery 2026-10-24: every write
+    -> 500). Probe once; fall back to the OS temp dir, which always exists."""
+    try:
+        p = ROOT / "data" / "uploads"
+        p.mkdir(parents=True, exist_ok=True)
+        probe = p / ".probe"
+        probe.write_bytes(b"1")
+        probe.unlink()
+        return p
+    except OSError:
+        alt = pathlib.Path(tempfile.gettempdir()) / "liarapilot-uploads"
+        try:
+            alt.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            alt = pathlib.Path(tempfile.gettempdir())
+        return alt
+
+
+UPLOAD_ROOT = _resolve_upload_root()
 FIXTURES = {
     "next-prisma-sqlite": ROOT / "fixtures" / "next-prisma-sqlite",
     "node-express": ROOT / "fixtures" / "node-express",
@@ -210,6 +232,67 @@ def account():
     return out
 
 
+@app.post("/api/account/check")
+def account_check(body: dict):
+    """بررسی حساب با توکنِ خودِ کاربر — بدون هیچ ذخیره‌سازی.
+    برای دروازهٔ تأیید: کاربر توکن API لیارای خودش را می‌دهد، تراز واقعی و
+    قیمت پلن پیشنهادی برمی‌گردد (فاکتور). خطاها فارسی و امن‌اند؛ توکن هرگز
+    در پاسخ/لاگ برنمی‌گردد."""
+    token = str(body.get("token") or "").strip()
+    if not token or len(token) < 20:
+        raise HTTPException(status_code=400, detail="توکن معتبر نیست — توکن کامل را از کنسول لیارا کپی کن.")
+    out: dict = {"connected": True}
+    try:
+        with httpx.Client(base_url="https://api.liara.ir", timeout=15.0,
+                          headers={"Authorization": f"Bearer {token}"}) as c:
+            r0 = c.get("/v1/projects")
+            if r0.status_code == 401:
+                raise HTTPException(status_code=401, detail="توکن پذیرفته نشد — دوباره از کنسول لیارا یک توکن تازه بساز.")
+            if r0.status_code != 200:
+                raise HTTPException(status_code=502, detail="اتصال به لیارا برقرار نشد؛ چند لحظه بعد دوباره تلاش کن.")
+            out["apps_count"] = len(((r0.json() or {}).get("projects")) or [])
+            # The token belongs to the USER'S OWN team — discover it, never reuse
+            # the operator's LIARA_TEAM_ID (different account entirely).
+            user_team = ""
+            try:
+                rt = c.get("/v2/teams")
+                if rt.status_code == 200:
+                    teams = ((rt.json() or {}).get("teams")) or []
+                    if teams:
+                        user_team = str(teams[0].get("_id") or "")
+                        name = str(teams[0].get("name") or "").strip()
+                        if name:
+                            out["team_name"] = name
+            except httpx.HTTPError:
+                pass
+            params = {"teamID": user_team} if user_team else None
+            r = c.get("/v1/billing", params=params)
+            if r.status_code == 200:
+                j = r.json() or {}
+                bal = ((j.get("team") or {}).get("balance"))
+                if bal is None:
+                    bal = ((j.get("user") or {}).get("balance"))
+                if isinstance(bal, (int, float)):
+                    out["balance_toman"] = round(float(bal))
+            r2 = c.get("/v1/me", params=params)
+            if r2.status_code == 200:
+                plans = ((r2.json() or {}).get("plans") or {})
+                wanted = (os.getenv("LIARA_PLAN_ID", "small-g2") or "").strip()
+                projs = plans.get("projects")
+                entry = projs.get(wanted) if isinstance(projs, dict) else None
+                if isinstance(entry, dict):
+                    price = entry.get("price")
+                    if isinstance(price, (int, float)):
+                        out["default_plan"] = wanted
+                        out["plan_price_hourly_toman"] = float(price)
+                    dp = entry.get("displayPrice")
+                    if isinstance(dp, (int, float)):
+                        out["plan_price_monthly_toman"] = float(dp)
+    except httpx.HTTPError:
+        raise HTTPException(status_code=502, detail="اتصال به لیارا برقرار نشد؛ چند لحظه بعد دوباره تلاش کن.") from None
+    return out
+
+
 @app.post("/api/sessions/demo")
 def demo_session(body: dict):
     key = str(body.get("fixture", ""))
@@ -269,6 +352,12 @@ def approve(sid: str, body: dict):
         s.liara_token = token
         if s.register is not None:
             s.register.add(token)
+        # The run already built a deployer (with the operator/env token) before
+        # the approval gate. Rebind it NOW so deploy/fix/verify execute against
+        # the USER'S OWN account, with the checkpoint state preserved.
+        from app.runner import rebind_deployer
+
+        rebind_deployer(s)
     if not runner_resume(s, payload):
         raise HTTPException(status_code=409, detail=f"cannot resume from status={s.status}")
     return JSONResponse({"ok": True}, status_code=202)

@@ -33,7 +33,7 @@ from app.config import load_defaults
 LOG_TAIL_CHARS = 2000  # redacted log tail handed to the model
 
 ALLOWED_ACTIONS = ("set_env", "change_port", "change_start_command", "add_disk",
-                   "change_platform", "ask_user", "give_up")
+                   "change_platform", "drop_pyproject", "ask_user", "give_up")
 
 ALLOWLIST_SHAPES = {
     "set_env": {"key": "str", "value": "str (empty ok; secret-looking keys FORBIDDEN -> ask_user)"},
@@ -41,6 +41,7 @@ ALLOWLIST_SHAPES = {
     "change_start_command": {"start_command": "str"},
     "add_disk": {"name": "str", "size": "str optional", "mount_to": "str"},
     "change_platform": {"platform": "one of the verified liara.json platform values"},
+    "drop_pyproject": {},
     "ask_user": {"question_fa": "str"},
     "give_up": {},
 }
@@ -176,6 +177,8 @@ def validate_params(action: str, params: dict, state: dict) -> tuple[bool, str]:
         if p not in allowed:
             return False, f"platform '{p}' not in verified liara.json values {sorted(allowed)}"
         return True, ""
+    if action == "drop_pyproject":
+        return True, ""  # no params — drops pyproject.toml from the deploy artifact
     if action == "ask_user":
         if not str(params.get("question_fa") or "").strip():
             return False, "ask_user needs question_fa"
@@ -213,6 +216,14 @@ def apply_action(action: str, params: dict, state: dict) -> tuple[dict, str]:
     elif action == "change_platform":
         plan["platform"] = str(params["platform"]).strip()
         desc = f"پلتفرم به «{plan['platform']}» تغییر کرد."
+    elif action == "drop_pyproject":
+        drops = list(plan.get("drop_files") or [])
+        if "pyproject.toml" not in drops:
+            drops.append("pyproject.toml")
+        plan["drop_files"] = drops
+        desc = ("پروژه هم requirements.txt و هم pyproject.toml دارد و بیلدر لیارا "
+                "اجازه هر دو را نمی‌دهد؛ pyproject.toml از بستهٔ استقرار حذف شد "
+                "(requirements.txt مرجع ماند).")
     return plan, desc
 
 
@@ -329,6 +340,15 @@ def deterministic_diagnosis(kind: str, state: dict) -> dict:
                 "action": "ask_user",
                 "params": {"question_fa": f"دستور شروع «{_start_command_of(state)}» کار نمی‌کند؛ دستور درست را بفرست."},
                 "confidence": 0.8}
+    if kind == "build_failed":
+        # REAL evidence override (live build 2026-10-24): the Liara python
+        # builder refuses an archive that carries BOTH requirements.txt and
+        # pyproject.toml. The log states it verbatim — act on it, no model call
+        # can know this platform rule better.
+        log_text = "\n".join(state.get("logs", []))
+        if "requirements.txt" in log_text and "pyproject.toml" in log_text:
+            return {"diagnosis_fa": "بیلدر لیارا می‌گوید پروژه هم requirements.txt و هم pyproject.toml دارد و اجازه هر دو را نمی‌دهد؛ pyproject.toml را از بستهٔ استقرار حذف می‌کنم.",
+                    "action": "drop_pyproject", "params": {}, "confidence": 0.95}
     if kind == "missing_disk_sqlite":
         size = os.getenv("LIARA_DISK_SIZE", "1")  # VERIFIED live: NUMBER of GB ("1G" -> 400)
         return {"diagnosis_fa": "دیتابیس SQLite به دیسک ماندگار نیاز دارد (الزام مستند لیارا)؛ دیسک می‌سازم و mount می‌کنم.",

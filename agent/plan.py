@@ -32,10 +32,16 @@ class PlanModel(BaseModel):
 
 
 def build_liara_json(inspection: dict, port: int | None) -> str:
-    """VERIFIED schema (config/defaults.yaml): platform values + disks[]."""
+    """VERIFIED schema (config/defaults.yaml): platform values + disks[].
+    Python: the start command MUST travel as liara.json "args" — Liara's
+    python buildpack ignores Procfile and defaults to `python3 main.py`
+    (docs.liara.ir/paas/python/how-tos/deploy-app, checked live 2026-10-24)."""
     spec: dict = {"platform": inspection.get("platform", "node")}
     if port:
         spec["port"] = port
+    if (str(spec["platform"]).lower() == "python"
+            and inspection.get("start_command")):
+        spec["args"] = [str(inspection["start_command"])]
     risk_ids = {r.get("id") for r in inspection.get("risks", [])}
     if "R1_sqlite_without_disk" in risk_ids:
         spec["disks"] = [{"name": "database", "mountTo": "db"}]
@@ -48,6 +54,9 @@ def liara_json_from_plan(plan: dict) -> str:
     spec: dict = {"platform": plan.get("platform") or "node"}
     if plan.get("port"):
         spec["port"] = plan["port"]
+    if (str(spec["platform"]).lower() == "python"
+            and plan.get("start_command")):
+        spec["args"] = [str(plan["start_command"])]
     if plan.get("disks"):
         spec["disks"] = [{"name": d["name"], "mountTo": d["mountTo"]}
                          for d in plan["disks"] if d.get("name") and d.get("mountTo")]
@@ -75,10 +84,15 @@ def build_plan_deterministic(inspection: dict, level: str) -> dict:
 
     files = [{"name": "liara.json", "content": build_liara_json(inspection, port or 3000)}]
     risk_ids = {r.get("id") for r in inspection.get("risks", [])}
+    import uuid
+
     return {
+        # unique per run — concurrent users never collide on one app name
+        "app_name": "lp-" + uuid.uuid4().hex[:6],
         "steps": steps,
         "port": port or 3000,
         "platform": platform,
+        "start_command": inspection.get("start_command"),
         "env_needed": env_needed,
         "prepared_files": files,
         "disks": [{"name": "database", "mountTo": "db"}] if "R1_sqlite_without_disk" in risk_ids else [],

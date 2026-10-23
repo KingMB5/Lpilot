@@ -33,6 +33,7 @@ class Session:
     llm: Any = None
     deployer: Any = None
     liara_token: str = ""            # user's Liara API token — RAM only, never logged
+    checkpointer: Any = None         # graph checkpointer — kept across deployer rebinds
     ask_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)  # 1 LLM call per question (T15)
     graph: Any = None
     thread_cfg: dict = field(default_factory=dict)

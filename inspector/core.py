@@ -77,7 +77,13 @@ def scan_project(project_dir: str) -> Scan:
     max_text = 512 * 1024  # per-file cap for text scanning
 
     sc = Scan(root=project_dir)
-    total = 0
+    # BUGFIX 2026-10-24: file COUNT and BYTES were previously accumulated into
+    # ONE variable, so any project whose (file_count + total_bytes) crossed the
+    # file limit (4000) got silently truncated mid-scan — e.g. a 6-file, 6KB
+    # project died on file #4 with truncated=True and platform=unknown. Two
+    # separate counters now.
+    count = 0
+    total_bytes = 0
     for dirpath, dirnames, filenames in os.walk(project_dir):
         dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
         rel_dir = os.path.relpath(dirpath, project_dir)
@@ -91,16 +97,16 @@ def scan_project(project_dir: str) -> Scan:
             rel = os.path.join(rel_dir, name) if rel_dir else name
             rel = rel.replace(os.sep, "/")
             sc.files.append(rel)
-            total += 1
-            if total > max_files:
+            count += 1
+            if count > max_files:
                 sc.truncated = True
                 return sc
             try:
                 size = os.path.getsize(os.path.join(dirpath, name))
             except OSError:
                 continue
-            total += size
-            if total > max_bytes:
+            total_bytes += size
+            if total_bytes > max_bytes:
                 sc.truncated = True
                 return sc
             ext = os.path.splitext(name)[1].lower()
@@ -114,7 +120,10 @@ def scan_project(project_dir: str) -> Scan:
                 sc.prisma_path = rel
             elif rel in ("Dockerfile", "dockerfile"):
                 sc.dockerfile = rel
-            if ext in TEXT_EXTS and 0 < size <= max_text:
+            # extensionless config files are text too (Procfile is the Python
+            # start-command convention and feeds the liara.json args plan)
+            is_text = ext in TEXT_EXTS or name in ("Procfile", "procfile")
+            if is_text and 0 < size <= max_text:
                 try:
                     with open(os.path.join(dirpath, name), "r", encoding="utf-8", errors="replace") as f:
                         sc.texts[rel] = f.read()
@@ -163,10 +172,20 @@ def _platform(sc: Scan) -> str:
     return "unknown"
 
 
-def _env_vars_required(sc: Scan) -> list[str]:
+JS_EXTS = {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"}
+
+
+def _env_vars_required(sc: Scan, platform: str = "unknown") -> list[str]:
+    """Platform-aware: a python deployment never runs the repo's .ts/.js files,
+    so node-style process.env hits inside them are false positives (real case
+    2026-10-24: self-deploy asked for ADMIN_PASSWORD from a bundled fixture)."""
+    wanted = {"python": {".py"}, "node": JS_EXTS, "next": JS_EXTS}.get(platform)
     found: set[str] = set()
     for rel, text in sc.texts.items():
-        if os.path.splitext(rel)[1] not in CODE_EXTS:
+        ext = os.path.splitext(rel)[1]
+        if ext not in CODE_EXTS:
+            continue
+        if wanted is not None and ext not in wanted:
             continue
         for m in ENV_VAR_RE.finditer(text):
             name = next(g for g in m.groups() if g)
@@ -188,7 +207,7 @@ def _port(sc: Scan, platform: str) -> int | None:
                 if literal:
                     return int(literal)
                 break  # listen(PORT) with no literal -> decide via env below
-        return 3000 if "PORT" in _env_vars_required(sc) else None
+        return 3000 if "PORT" in _env_vars_required(sc, platform) else None
     if platform == "python":
         for rel, text in sc.texts.items():
             if rel.endswith(".py"):
@@ -211,12 +230,27 @@ def _commands(sc: Scan, platform: str) -> tuple[str | None, str | None]:
         start = "npm run start"
     if platform == "python":
         build = None
-        if "manage.py" in sc.files:
-            start = "python manage.py runserver 0.0.0.0:8000"
-        elif "app.py" in sc.files:
-            start = "python app.py"
-        elif "main.py" in sc.files:
-            start = "python main.py"
+        # Liara's python buildpack runs `python3 main.py` by default and IGNORES
+        # a Procfile — the real start command must travel inside liara.json
+        # "args" (docs.liara.ir/paas/python/how-tos/deploy-app, checked live).
+        # Procfile is still the standard convention, so read it first and turn
+        # it into the plan's start command; fall back to the usual entry files.
+        proc = sc.texts.get("Procfile") or sc.texts.get("procfile") or ""
+        for line in proc.splitlines():
+            if ":" in line:
+                cmd = line.split(":", 1)[1].strip()
+                if cmd:
+                    start = cmd
+                    break
+        else:
+            start = None
+        if not start:
+            if "manage.py" in sc.files:
+                start = "python manage.py runserver 0.0.0.0:8000"
+            elif "app.py" in sc.files:
+                start = "python app.py"
+            elif "main.py" in sc.files:
+                start = "python main.py"
     if platform == "static":
         build, start = None, None
     return build, start
@@ -227,7 +261,7 @@ def inspect(project_dir: str) -> dict:
     platform = _platform(sc)
     port = _port(sc, platform)
     build, start = _commands(sc, platform)
-    env_required = _env_vars_required(sc)
+    env_required = _env_vars_required(sc, platform)
     risks = rules_mod.evaluate(sc, platform=platform, env_required=env_required)
     return {
         "platform": platform,

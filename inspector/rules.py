@@ -21,13 +21,13 @@ SECRET_MIN_LEN = 6
 
 CODE_EXTS = {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs", ".py"}
 
-# secret-ish var assigned a literal, e.g. ADMIN_PASSWORD="benis1404" / adminPassword: "x"
+# secret-ish var assigned a literal, e.g. ADMIN_PASSWORD = "..." / adminPassword: "x"
 _ASSIGN_SECRET_RE = re.compile(
     r"""([A-Za-z_$][A-Za-z0-9_$-]*(?:password|passwd|secret|token|api_?key)[A-Za-z0-9_$-]*)"""
     r"""\s*[:=]=?\s*["']([^"']{4,})["']""",
     re.IGNORECASE,
 )
-# process.env.ADMIN_PASSWORD || "benis1404"
+# a node fallback like process.env + SECRETNAME || literal (kept pattern-free to avoid self-detection)
 _FALLBACK_SECRET_RE = re.compile(
     r"""process\.env\.([A-Z0-9_]*(?:PASSWORD|PASSWD|SECRET|TOKEN|API_?KEY)[A-Z0-9_]*)"""
     r"""\s*\|\|\s*["']([^"']{4,})["']""",
