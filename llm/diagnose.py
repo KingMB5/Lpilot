@@ -33,7 +33,8 @@ from app.config import load_defaults
 LOG_TAIL_CHARS = 2000  # redacted log tail handed to the model
 
 ALLOWED_ACTIONS = ("set_env", "change_port", "change_start_command", "add_disk",
-                   "change_platform", "drop_pyproject", "add_prepared_file", "ask_user", "give_up")
+                   "change_platform", "drop_pyproject", "add_prepared_file",
+                   "patch_dependency", "ask_user", "give_up")
 
 ALLOWLIST_SHAPES = {
     "set_env": {"key": "str", "value": "str (empty ok; secret-looking keys FORBIDDEN -> ask_user)"},
@@ -190,6 +191,18 @@ def validate_params(action: str, params: dict, state: dict) -> tuple[bool, str]:
         if name not in _PREPARED_FILE_ALLOWLIST:
             return False, f"add_prepared_file: only {sorted(_PREPARED_FILE_ALLOWLIST)} are allowlisted"
         return True, ""
+    if action == "patch_dependency":
+        # LIVE 2026-10-24 (round-6 E2E): Liara's builders refuse vulnerable
+        # framework versions (CVE-2025-55182 gate names the patched list).
+        # Bumping a dependency rewrites user config — allow ONLY the pinned,
+        # platform-mandated case: exact-version bump of "next".
+        name = str(params.get("name") or "").strip()
+        version = str(params.get("version") or "").strip()
+        if name != "next":
+            return False, "patch_dependency: only 'next' is allowlisted (platform CVE gate)"
+        if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+            return False, "patch_dependency needs an exact x.y.z version"
+        return True, ""
     if action == "ask_user":
         if not str(params.get("question_fa") or "").strip():
             return False, "ask_user needs question_fa"
@@ -243,6 +256,35 @@ def apply_action(action: str, params: dict, state: dict) -> tuple[dict, str]:
         plan["prepared_files"] = prepared
         desc = (f"فایل «{name}» با تنظیم known-good به بستهٔ استقرار اضافه شد "
                 "(رفع تداخل نسخه‌های وابستگی‌ها در نصب).")
+    elif action == "patch_dependency":
+        name = str(params["name"]).strip()
+        version = str(params["version"]).strip()
+        pkg = None
+        override = next((f for f in (plan.get("prepared_files") or [])
+                         if str(f.get("name")) == "package.json"), None)
+        if override is not None:
+            try:
+                pkg = json.loads(str(override.get("content") or "{}"))
+            except ValueError:
+                pkg = None
+        if not isinstance(pkg, dict):
+            pd = str(state.get("project_dir") or "")
+            try:
+                pkg = json.loads((pathlib.Path(pd) / "package.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                pkg = None
+        if isinstance(pkg, dict):
+            deps_map = pkg.get("dependencies") if isinstance(pkg.get("dependencies"), dict) else {}
+            dev_map = pkg.get("devDependencies") if isinstance(pkg.get("devDependencies"), dict) else {}
+            where = "devDependencies" if name in dev_map else "dependencies"
+            pkg.setdefault(where, {})[name] = version
+            prepared = [f for f in (plan.get("prepared_files") or [])
+                        if str(f.get("name")) != "package.json"]
+            prepared.append({"name": "package.json",
+                             "content": json.dumps(pkg, ensure_ascii=False, indent=2)})
+            plan["prepared_files"] = prepared
+            desc = (f"وابستگی «{name}» در بستهٔ استقرار به نسخهٔ پچ‌شدهٔ {version} ارتقا یافت "
+                    "(الزام امنیتی بیلدر لیارا؛ کد اصلی دست‌نخورده ماند).")
     return plan, desc
 
 
@@ -394,6 +436,29 @@ def deterministic_diagnosis(kind: str, state: dict) -> dict:
                 return {"diagnosis_fa": f"اسکریپت start در package.json نیست؛ اما «{candidate}» در پروژه موجود است — دستور شروع را به همان تغییر می‌دهم.",
                         "action": "change_start_command", "params": {"start_command": candidate},
                         "confidence": 0.85}
+        # LIVE 2026-10-24 (round-6 E2E): the builders gate vulnerable Next.js
+        # versions ("uses Next.js v15.5.4, which is affected by CVE-2025-55182
+        # ... Please upgrade Next.js to one of the patched versions (15.0.5,
+        # ..., or later)"). The log names the allowed list — parse it and bump
+        # the dependency deterministically instead of escalating to the user.
+        gate = re.search(r"patched versions \(([^)]+)\)", log_text)
+        cur = re.search(r"uses Next\.js v(\d+\.\d+\.\d+), which is affected by CVE", log_text)
+        if gate and cur:
+            versions = [v.strip() for v in gate.group(1).replace(" or later", "").split(",")
+                        if re.fullmatch(r"\d+\.\d+\.\d+", v.strip())]
+            cur_t = tuple(int(x) for x in cur.group(1).split("."))
+            parsed = sorted(tuple(int(x) for x in v.split(".")) for v in versions)
+            same_major = [t for t in parsed if t[0] == cur_t[0] and t >= cur_t]
+            target = same_major[0] if same_major else (parsed[-1] if parsed else None)
+            if target:
+                tv = ".".join(map(str, target))
+                return {"diagnosis_fa":
+                            f"بیلدر لیارا نسخهٔ Next.js {cur.group(1)} را به‌خاطر حفرهٔ امنیتی "
+                            "CVE-2025-55182 (React2Shell، CVSS 10) رد می‌کند؛ در لاگ صریح است. "
+                            f"وابستگی next را به نزدیک‌ترین نسخهٔ پچ‌شدهٔ مجاز ({tv}) ارتقا می‌دهم و دوباره بیلد می‌گیرم.",
+                        "action": "patch_dependency",
+                        "params": {"name": "next", "version": tv},
+                        "confidence": 0.95}
         npm_err = _first_log_line(log_text, ("npm error", "npm ERR!"))
         if npm_err:
             return {"diagnosis_fa": f"نصب وابستگی‌ها شکست خورد؛ خطای صریح لاگ: «{npm_err}». معمولاً نسخه‌ی یک بسته در دسترس نیست یا package.json خراب است.",

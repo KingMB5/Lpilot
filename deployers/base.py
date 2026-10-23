@@ -73,8 +73,20 @@ def make_deploy_config(inspection: dict, plan: dict, approvals: dict,
     # container 502'd if package.json lacked a start script.
     try:
         if (str(cfg["platform"]).lower() in ("node", "next") and start_command and project_dir):
-            pkg_file = pathlib.Path(project_dir) / "package.json"
-            pkg = json.loads(pkg_file.read_text(encoding="utf-8")) if pkg_file.exists() else {}
+            # Start from an agent-prepared override when the fix loop already
+            # patched package.json (e.g. patch_dependency CVE bump) — agent
+            # fixes must survive into the artifact; else read the project's own.
+            pkg = None
+            for f in cfg["prepared_files"]:
+                if str(f.get("name")) == "package.json":
+                    try:
+                        pkg = json.loads(str(f.get("content") or "{}"))
+                    except ValueError:
+                        pkg = None
+                    break
+            if not isinstance(pkg, dict):
+                pkg_file = pathlib.Path(project_dir) / "package.json"
+                pkg = json.loads(pkg_file.read_text(encoding="utf-8")) if pkg_file.exists() else {}
             scripts = pkg.setdefault("scripts", {})
             changed = False
             if str(scripts.get("start", "")) != str(start_command):
