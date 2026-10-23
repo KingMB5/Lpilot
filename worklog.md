@@ -564,3 +564,30 @@ Stage Summary:
 - A1/A2/A3: COMPLETE and REAL (evidence in docs/VERIFIED_MATRIX.md).
 - A4: ATTEMPTED, blocked by Liara builder internals (documented, not claimed).
 - The product survived a hostile live API: 6 critical fixes, each test-guarded.
+
+---
+Task ID: 6-a
+Agent: Z.ai Code (main)
+Task: Post-restart recovery + offline demo rehearsal (video readiness check)
+
+Work Log:
+- Sandbox restart wiped /tmp/lp.env (all 3 secrets: Liara token, BoxAPI key, GH PAT) and .venv;
+  also reverted ~17 tracked files to pre-epic versions (mode changes + lost .gitignore block).
+- Restored tracked files to HEAD (64b71b8, the real-run epic) via git checkout; rebuilt .venv from
+  pinned requirements.txt + dev extras (pytest==9.1.1, respx==0.23.1).
+- Full suite: 159 passed in 4.34s. Working tree clean.
+- Rehearsed the 5-min demo golden path OFFLINE (DEMO_MODE=1) in a single process run:
+  upload broken-project.zip -> assessment -> answers (beginner 5/10) -> start ->
+  gate 1 (prepared_files/env_needed/cost) -> approve -> gate 2 (kind=question, attempt 1) ->
+  approve -> gate 3 (kind=question, attempt 2) -> approve -> status=done,
+  url=https://mock-app-59780.liara.run, fix_history entries: 2, events: 50.
+- Discovered during rehearsal: the product legitimately re-enters awaiting_approval multiple times
+  (first the cost/prepared-files gate, then up to max_attempts ask_user question interrupts);
+  a single approve is not enough for scripted curl runs — approval loop required.
+- Rehearsal driver kept out of the repo at /home/z/.rehearsal/rehearse.sh.
+
+Stage Summary:
+- Repo is fully restored to the epic state; 159 tests green; offline demo path verified end-to-end.
+- BLOCKER (needs operator): re-send 3 credentials — GH PAT (GitHub is ~15 commits behind:
+  the whole real-run epic is unpushed), Liara token + BoxAPI key (for the live video recording).
+- Video is the remaining hard deliverable; script at docs/DEMO_SCRIPT.md is ready.
