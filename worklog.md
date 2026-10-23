@@ -722,3 +722,58 @@ Work Log:
 Stage Summary:
 - Product is REAL end-to-end: GitHub/ZIP intake, real analysis, real live prices in the approval gate, human gates, real deployer + real verify + real self-heal + honest escalation, real Star Agent with schedules/reports/brief.
 - liarapilot-app is DELETED (was 502-broken; platform serving incident). Next real deploy (e.g. the operator's perfume site) creates its app fresh; if the platform still 502s, the product's verify will catch it and escalate honestly.
+
+---
+Task ID: 11-a
+Agent: Z.ai Code (main)
+Task: "Bring the project LIVE on Liara and keep it there" — the friend-scenario
+(no-knowledge vibe-coder): upload -> what to buy on Liara -> permission gate ->
+their OWN API token -> real deploy with a real invoice -> weekly Start Agent.
+
+Work Log:
+- Root-caused the "simple page" report: liarapilot-app was deleted (Task 10-a
+  platform incident); console list was empty. A stale broken-project fixture
+  deploy had also replaced the app earlier ("never happens in mock").
+- APPROVAL GATE REBUILT: POST /api/account/check (user's token only in RAM,
+  user's OWN team discovered via /v2/teams, real balance + live small-g2
+  price); invoice grid (plan/hour/month + balance-sufficiency note); token
+  field (password, mono, LTR) + 3-step console guide; liara_token rides the
+  approve call.
+- DEPLOYER REBIND: approve now rebuilds the deployer with the USER'S token and
+  recompiles the graph against a session-held checkpointer — the pending
+  interrupt survives; deploy/fix/verify run on the user's own account.
+- UNIQUE APP NAMES: plan app_name = lp-<hex6> (deploy fallback too) —
+  concurrent users can no longer overwrite each other's app.
+- PYTHON ON LIARA SOLVED (the old 502): docs.liara.ir checked live — the
+  python buildpack ignores an in-archive liara.json and runs `python3 main.py`
+  by default; the real start command must travel in the RELEASE BODY args.
+  Implemented (release args from config.start_command for python), Procfile is
+  now parsed by the inspector, so plan/start flows end-to-end.
+- HARD BUGFIX in scan_project: file count and bytes were accumulated into ONE
+  variable — any project crossing 4000 combined units was silently truncated
+  (platform=unknown). Split counters.
+- Platform-aware env extraction (python ignores node process.env hits in
+  bundled fixtures — self-detecting comments in rules.py sanitized too).
+- NEW self-fix action drop_pyproject (live build error "found both
+  requirements.txt and pyproject.toml") with deterministic evidence override;
+  drop_files flows into build_source_zip extra_exclude.
+- LIVE READ-ONLY ROOTFS: writes 500'd in the Liara container; upload root now
+  probes and falls back to the OS temp dir.
+- SELF-DEPLOY PROVEN: the product deployed ITSELF (zip intake -> expert ->
+  live-price approval gate -> real build READY -> verify 200) to
+  https://lp-dcded0.liara.run; env set via update-envs (DEPLOYER=liara_api,
+  real LLM; LIARA token intentionally NOT set — users bring their own).
+- Browser E2E on the LIVE app: sample -> assessment -> invoice/token modal ->
+  real account check (balance 1,991,979 T, team «لیارا») -> approve -> report
+  -> weekly schedule -> first care report (score 30, honest) -> agent brief.
+  Console clean; mobile 390px + desktop verified.
+- Housekeeping: failed test apps lp-3200a2 / lp-921f49 deleted; total
+  mis-spend ~1.3k T. Suite 159 passed. Commit d5a1628 pushed to KingMB5/Lpilot.
+
+Stage Summary:
+- THE PRODUCT IS LIVE AND PERSISTENT: https://lp-dcded0.liara.run
+- Friend scenario is real end-to-end: they upload, see what to buy and the
+  invoice, grant permission, paste THEIR OWN token (their account pays), and
+  the deploy runs on their account; weekly Start Agent keeps watching.
+- Two platform truths encoded in code+tests: release-body args for python,
+  read-only rootfs fallback for uploads.
