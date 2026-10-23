@@ -55,7 +55,13 @@ def ensure_llm(session: Session) -> None:
         client = get_client(register, budget, demo_mode=demo, concepts=concepts)
         session.llm = client
         session.llm_name = client.name
-        session.demo = demo or client.name.startswith(("fake", "cached(fake)"))
+        # DISCOVERY 2026-10-24 (live E2E on lp-dcded0): flipping session.demo
+        # here conflated "LLM unavailable" with "offline demo" — a keyless run
+        # silently became a demo session (MockDeployer + simulated deploy logs)
+        # even when the user had just approved with their REAL Liara token,
+        # because rebind_deployer refuses to rebind demo sessions. Demo stays
+        # exactly what the session was created as; a missing LLM key only
+        # degrades chat/explain quality (FakeLLM), never the deploy path.
 
 
 def _live_url_checker() -> Callable[[str], dict]:
