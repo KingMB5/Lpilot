@@ -221,13 +221,29 @@ def _port(sc: Scan, platform: str) -> int | None:
     return None
 
 
+NODE_ENTRY_FILES = ("server.js", "server.mjs", "index.js", "index.mjs", "app.js", "main.js")
+
+
 def _commands(sc: Scan, platform: str) -> tuple[str | None, str | None]:
     pkg = sc.package_json or {}
     scripts = pkg.get("scripts") or {}
     build = "npm run build" if scripts.get("build") else None
     start = "npm run start" if scripts.get("start") else None
-    if platform == "next" and not start:
-        start = "npm run start"
+    if platform == "next":
+        # BUGFIX 2026-10-25 (real user deploy): a Next project whose package.json
+        # has NO start script got start="npm run start" -> `npm start` fails with
+        # "missing script: start" at runtime (UNHEALTHY). And an AI-generated
+        # start="next dev" would ship a dev server to production. Deterministic
+        # repair: ship `next start`; deployers/base.py materializes it into
+        # package.json scripts.start for the node/next buildpack.
+        raw = str(scripts.get("start") or "")
+        if "dev" in raw or not raw:
+            start = "next start"
+    if platform == "node" and not start:
+        for name in NODE_ENTRY_FILES:
+            if name in sc.files:
+                start = f"node {name}"
+                break
     if platform == "python":
         build = None
         # Liara's python buildpack runs `python3 main.py` by default and IGNORES

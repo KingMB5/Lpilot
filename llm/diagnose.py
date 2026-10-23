@@ -33,7 +33,7 @@ from app.config import load_defaults
 LOG_TAIL_CHARS = 2000  # redacted log tail handed to the model
 
 ALLOWED_ACTIONS = ("set_env", "change_port", "change_start_command", "add_disk",
-                   "change_platform", "drop_pyproject", "ask_user", "give_up")
+                   "change_platform", "drop_pyproject", "add_prepared_file", "ask_user", "give_up")
 
 ALLOWLIST_SHAPES = {
     "set_env": {"key": "str", "value": "str (empty ok; secret-looking keys FORBIDDEN -> ask_user)"},
@@ -42,8 +42,14 @@ ALLOWLIST_SHAPES = {
     "add_disk": {"name": "str", "size": "str optional", "mount_to": "str"},
     "change_platform": {"platform": "one of the verified liara.json platform values"},
     "drop_pyproject": {},
+    "add_prepared_file": {"name": ".npmrc", "content": "str (deterministic allowlist of known-good files)"},
     "ask_user": {"question_fa": "str"},
     "give_up": {},
+}
+
+# Deterministic known-good prepared files the fix loop may add — nothing else.
+_PREPARED_FILE_ALLOWLIST = {
+    ".npmrc": "legacy-peer-deps=true\n",
 }
 
 
@@ -179,6 +185,11 @@ def validate_params(action: str, params: dict, state: dict) -> tuple[bool, str]:
         return True, ""
     if action == "drop_pyproject":
         return True, ""  # no params — drops pyproject.toml from the deploy artifact
+    if action == "add_prepared_file":
+        name = str(params.get("name") or "").strip().lstrip("/")
+        if name not in _PREPARED_FILE_ALLOWLIST:
+            return False, f"add_prepared_file: only {sorted(_PREPARED_FILE_ALLOWLIST)} are allowlisted"
+        return True, ""
     if action == "ask_user":
         if not str(params.get("question_fa") or "").strip():
             return False, "ask_user needs question_fa"
@@ -224,6 +235,14 @@ def apply_action(action: str, params: dict, state: dict) -> tuple[dict, str]:
         desc = ("پروژه هم requirements.txt و هم pyproject.toml دارد و بیلدر لیارا "
                 "اجازه هر دو را نمی‌دهد؛ pyproject.toml از بستهٔ استقرار حذف شد "
                 "(requirements.txt مرجع ماند).")
+    elif action == "add_prepared_file":
+        name = str(params["name"]).strip().lstrip("/")
+        content = _PREPARED_FILE_ALLOWLIST.get(name, "")
+        prepared = [f for f in (plan.get("prepared_files") or []) if str(f.get("name")) != name]
+        prepared.append({"name": name, "content": content})
+        plan["prepared_files"] = prepared
+        desc = (f"فایل «{name}» با تنظیم known-good به بستهٔ استقرار اضافه شد "
+                "(رفع تداخل نسخه‌های وابستگی‌ها در نصب).")
     return plan, desc
 
 
@@ -301,6 +320,15 @@ def _missing_env_keys(state: dict) -> list[str]:
             if not str(have.get(k, "")).strip()]
 
 
+def _first_log_line(log_text: str, prefixes: tuple[str, ...]) -> str | None:
+    """First non-empty log line starting with one of the prefixes (evidence —
+    quoted verbatim; capped for readability)."""
+    for line in log_text.splitlines():
+        s = line.strip()
+        if s.startswith(prefixes):
+            return s[:160]
+    return None
+
 def deterministic_diagnosis(kind: str, state: dict) -> dict:
     """The scripted diagnosis — FakeLLM's brain offline AND the validator's fallback.
     Deterministic by design: same state -> same diagnosis (AGENTS.md)."""
@@ -341,19 +369,49 @@ def deterministic_diagnosis(kind: str, state: dict) -> dict:
                 "params": {"question_fa": f"دستور شروع «{_start_command_of(state)}» کار نمی‌کند؛ دستور درست را بفرست."},
                 "confidence": 0.8}
     if kind == "build_failed":
+        log_text = "\n".join(state.get("logs", []))
         # REAL evidence override (live build 2026-10-24): the Liara python
         # builder refuses an archive that carries BOTH requirements.txt and
         # pyproject.toml. The log states it verbatim — act on it, no model call
         # can know this platform rule better.
-        log_text = "\n".join(state.get("logs", []))
         if "requirements.txt" in log_text and "pyproject.toml" in log_text:
             return {"diagnosis_fa": "بیلدر لیارا می‌گوید پروژه هم requirements.txt و هم pyproject.toml دارد و اجازه هر دو را نمی‌دهد؛ pyproject.toml را از بستهٔ استقرار حذف می‌کنم.",
                     "action": "drop_pyproject", "params": {}, "confidence": 0.95}
+        # REAL-WORLD FIX 2026-10-25 (user deploy): the two most common Node/
+        # Next build failures now have concrete, scripted remedies instead of a
+        # generic "could not diagnose" escalation.
+        if "ERESOLVE" in log_text or "Could not resolve dependency" in log_text or "peer dep" in log_text.lower():
+            return {"diagnosis_fa": "نصب وابستگی‌ها به تداخل peer dependency خورد (ERESOLVE در لاگ نصب واضح است)؛ فایل .npmrc با legacy-peer-deps=true اضافه می‌کنم و دوباره بیلد می‌گیرم.",
+                    "action": "add_prepared_file",
+                    "params": {"name": ".npmrc", "content": "legacy-peer-deps=true\n"},
+                    "confidence": 0.85}
+        if "JavaScript heap out of memory" in log_text or "Killed" in log_text or "SIGKILL" in log_text or "out of memory" in log_text.lower():
+            return {"diagnosis_fa": "بیلد به کمبود حافظه (OOM) خورد — در لاگ بیلد صریح است. این را با تغییر کد نمی‌شود درست کرد؛ به یک پلن با رم بیشتر نیاز داری (در کنسول لیارا پلن برنامه را ارتقا بده) یا بیلد را سبک‌تر کن.",
+                    "action": "give_up", "params": {}, "confidence": 0.9}
+        if "missing script: start" in log_text.lower():
+            candidate = _start_candidate(state)
+            if candidate:
+                return {"diagnosis_fa": f"اسکریپت start در package.json نیست؛ اما «{candidate}» در پروژه موجود است — دستور شروع را به همان تغییر می‌دهم.",
+                        "action": "change_start_command", "params": {"start_command": candidate},
+                        "confidence": 0.85}
+        npm_err = _first_log_line(log_text, ("npm error", "npm ERR!"))
+        if npm_err:
+            return {"diagnosis_fa": f"نصب وابستگی‌ها شکست خورد؛ خطای صریح لاگ: «{npm_err}». معمولاً نسخه‌ی یک بسته در دسترس نیست یا package.json خراب است.",
+                    "action": "give_up", "params": {}, "confidence": 0.7}
     if kind == "missing_disk_sqlite":
         size = os.getenv("LIARA_DISK_SIZE", "1")  # VERIFIED live: NUMBER of GB ("1G" -> 400)
         return {"diagnosis_fa": "دیتابیس SQLite به دیسک ماندگار نیاز دارد (الزام مستند لیارا)؛ دیسک می‌سازم و mount می‌کنم.",
                 "action": "add_disk",
                 "params": {"name": "database", "size": size, "mount_to": "db"},
                 "confidence": 0.9}
-    return {"diagnosis_fa": "از لاگ‌ها علت قابل‌استخراجی نیافتم؛ ادامه‌ی خودکار مسئولانه نیست.",
+    # FINAL-EVIDENCE give_up (2026-10-25): quote the strongest concrete log
+    # line so the user never faces a vague "nonsense problems" wall again.
+    tail = "\n".join(state.get("logs", [])[-8:])
+    evidence = _first_log_line(tail, ("npm error", "npm ERR!", "Error:", "error", "failReason",
+                                      "release", "FATAL", "Cannot find"))
+    base_fa = "از لاگ‌ها علت قابل‌استخراجی نیافتم؛ ادامه‌ی خودکار مسئولانه نیست."
+    if evidence:
+        base_fa = ("از لاگ‌ها الگوی قابل‌اصلاح خودکاری نیافتم. قوی‌ترین سرنخ لاگ: "
+                   f"«{evidence[:160]}». لاگ کامل در همین صفحه است؛ تصمیم با تو است.")
+    return {"diagnosis_fa": base_fa,
             "action": "give_up", "params": {}, "confidence": 0.3}

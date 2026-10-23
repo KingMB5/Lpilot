@@ -15,14 +15,13 @@ from typing import Any, Callable
 
 from agent.assessment import assess
 from agent.risk import safe_action
-from agent.plan import PlanModel, build_plan_deterministic, liara_json_from_plan
+from agent.plan import build_plan_deterministic, liara_json_from_plan
 from deployers.base import make_deploy_config
 from llm.diagnose import (DIAGNOSE_SYSTEM, LOG_TAIL_CHARS, DiagnosisModel,
                           _missing_env_keys, apply_action, build_diagnose_context,
                           build_diagnose_user, deterministic_diagnosis, safe_params,
                           validate_params)
 from llm.explain import explain as explain_risk_text
-from llm.prompts import PLAN_SYSTEM, build_plan_user
 
 MAX_FIX_ATTEMPTS = 3  # enforced in code, never delegated to the LLM
 
@@ -131,28 +130,12 @@ def make_plan(state: dict, deps: Deps) -> dict:
         return {"status": "cancelled"}
     deps.emit("stage", {"name": "make_plan", "fa": "ساخت برنامه استقرار"})
 
-    fallback_plan = build_plan_deterministic(state.get("inspection", {}), state.get("level", "beginner"))
-
-    def fallback() -> dict:
-        deps.emit("log", {"text": "plan: deterministic fallback used"})
-        return fallback_plan
-
-    try:
-        plan = deps.llm.complete_json(
-            PLAN_SYSTEM, build_plan_user(state.get("inspection", {}), state.get("level", "beginner")),
-            PlanModel, fallback,
-        )
-    except Exception as e:  # budget exceeded / client failure -> deterministic plan
-        deps.emit("log", {"text": f"plan: llm unavailable ({type(e).__name__}) — deterministic plan"})
-        plan = fallback_plan
-
-    # deterministic overrides: port/env/limits/disks are ours, not the LLM's
-    plan["port"] = fallback_plan["port"]
-    plan["env_needed"] = fallback_plan["env_needed"]
-    plan["platform"] = fallback_plan["platform"]
-    plan["prepared_files"] = fallback_plan["prepared_files"]
-    plan["disks"] = fallback_plan["disks"]
-    plan.setdefault("cost_unverified", True)
+    # DETERMINISTIC-ONLY PLAN (2026-10-25): the plan is now built purely in code.
+    # The previous LLM-shaped plan produced free-form "steps" that real users
+    # read as nonsense ("چرت و پرت"), and no amount of prompting can make free
+    # text as trustworthy as code. The LLM's intelligence is spent where it is
+    # grounded: explaining risks, teaching, and diagnosing failures.
+    plan = build_plan_deterministic(state.get("inspection", {}), state.get("level", "beginner"))
 
     # REAL cost (live catalog): for real sessions, replace the UNVERIFIED cost
     # line with the actual per-hour plan price read from the Liara API.

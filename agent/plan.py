@@ -75,12 +75,12 @@ def build_plan_deterministic(inspection: dict, level: str) -> dict:
                   "detail": f"پورت تشخیص‌داده‌شده: {port if port else 'نامشخص — پیش‌فرض ۳۰۰۰ بسته می‌شود'}"})
     if inspection.get("build_command"):
         steps.append({"title_fa": "بیلد گرفتن روی سرور",
-                      "detail": f"دستور: {inspection['build_command']}"})
+                      "detail": f"دستور: {inspection['build_command']} — بیلدهای سنگین (مثل Next.js) ممکن است چند دقیقه طول بکشد؛ نگران نباش، منتظر می‌مانیم."})
     if env_needed:
         steps.append({"title_fa": "تنظیم متغیرهای محیطی",
                       "detail": "مقادیر را خودت در گام تأیید وارد می‌کنی: " + "، ".join(env_needed)})
-    steps.append({"title_fa": "استقرار روی لیارا", "detail": "با Deployer انتخاب‌شده (mock یا واقعی)"})
-    steps.append({"title_fa": "بررسی سلامت آدرس زنده", "detail": "درخواست HTTP به آدرس نهایی"})
+    steps.append({"title_fa": "استقرار روی لیارا", "detail": "ساخت اپ، آپلود سورس، انتشار و اجرا با توکن خودت"})
+    steps.append({"title_fa": "بررسی سلامت آدرس زنده", "detail": "درخواست HTTP به آدرس نهایی تا مطمئن شویم واقعاً بالا آمده"})
 
     files = [{"name": "liara.json", "content": build_liara_json(inspection, port or 3000)}]
     risk_ids = {r.get("id") for r in inspection.get("risks", [])}

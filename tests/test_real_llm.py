@@ -121,8 +121,10 @@ def test_call_cap_and_call_log(monkeypatch, caplog):
 
 
 def test_budget_exception_is_caught_by_plan_node_deterministic_plan():
-    """Any client exception (incl. the new call cap) degrades to deterministic
-    behavior — the plan NODE wraps complete_json in try/except."""
+    """2026-10-25: make_plan is DETERMINISTIC-ONLY (LLM no longer shapes the
+    plan — its free-form steps read as nonsense to real users). A dead client
+    therefore cannot affect it at all: the plan is still correct, no crash,
+    and no LLM call is made."""
 
     class DeadClient:
         name = "dead"
@@ -141,7 +143,9 @@ def test_budget_exception_is_caught_by_plan_node_deterministic_plan():
     deps = Deps(llm=DeadClient(), deployer=MockDeployer(), emit=lambda t, p: events.append((t, p)))
     out = make_plan({"inspection": insp, "level": "beginner"}, deps)
     assert out["plan"]["port"] == insp["port"]  # deterministic plan used
-    assert any(t == "log" and "llm unavailable" in p["text"] for t, p in events)
+    # no LLM-shaped steps: every step title comes from the deterministic builder
+    assert all(s["title_fa"] for s in out["plan"]["steps"])
+    assert not any(t == "log" and "llm unavailable" in p["text"] for t, p in events)
 
 
 # ---------------------------------------------------------------- schema (T3.2)

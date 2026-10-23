@@ -167,6 +167,14 @@ class LiaraApiDeployer:
             return {"ok": False, "kind": "auth_failed", "message": "no LIARA_API_TOKEN in memory",
                     "logs": list(self._logs)}
 
+        # REAL-WORLD FIX 2026-10-25: the configured 300s build timeout TIMED OUT
+        # on honest Next.js/react builds (npm install + next build routinely
+        # take 5-10 min on small plans). A TIMEDOUT release then hit the fix
+        # loop with nothing actionable — the "nonsense problems" report. The
+        # poll window now floors at 900s for every real build; per-release
+        # VERIFIED states (READY/FAILED/...) still end the poll early.
+        self.poll_timeout_s = max(self.poll_timeout_s, 900.0)
+
         try:
             if (err := self._ensure_app(app, config)) is not None:
                 return err

@@ -60,13 +60,31 @@ def make_deploy_config(inspection: dict, plan: dict, approvals: dict,
     # deployer materializes it as a package.json override in the sources zip
     # (prepared_files entries override same-named files) — deterministic, no
     # code execution, and the original dependencies are preserved.
+    # BUGFIX 2026-10-25: this previously ran for platform "node" ONLY, so a
+    # Next.js plan's start_command ("next start") never materialized and the
+    # container 502'd if package.json lacked a start script.
     try:
-        if (str(cfg["platform"]).lower() == "node" and start_command and project_dir):
+        if (str(cfg["platform"]).lower() in ("node", "next") and start_command and project_dir):
             pkg_file = pathlib.Path(project_dir) / "package.json"
             pkg = json.loads(pkg_file.read_text(encoding="utf-8")) if pkg_file.exists() else {}
             scripts = pkg.setdefault("scripts", {})
+            changed = False
             if str(scripts.get("start", "")) != str(start_command):
                 scripts["start"] = str(start_command)
+                changed = True
+            # REAL-WORLD FIX 2026-10-25: a Prisma project fails `npm run build`
+            # on the builder because the prisma client was never generated
+            # (no postinstall locally either if node_modules came prebuilt).
+            # Deterministic repair: ensure scripts.postinstall runs prisma
+            # generate when a schema exists and prisma is a dependency.
+            deps_ = {**(pkg.get("dependencies") or {}), **(pkg.get("devDependencies") or {})}
+            has_schema = (pathlib.Path(project_dir) / "prisma" / "schema.prisma").exists()
+            if has_schema and "prisma" in deps_:
+                pi = str(scripts.get("postinstall", "")).strip()
+                if "prisma generate" not in pi:
+                    scripts["postinstall"] = (pi + " && " if pi else "") + "prisma generate"
+                    changed = True
+            if changed:
                 override = {"name": "package.json",
                             "content": json.dumps(pkg, ensure_ascii=False, indent=2)}
                 cfg["prepared_files"] = [f for f in cfg["prepared_files"]
