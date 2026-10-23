@@ -80,18 +80,19 @@ def make_deploy_config(inspection: dict, plan: dict, approvals: dict,
             if str(scripts.get("start", "")) != str(start_command):
                 scripts["start"] = str(start_command)
                 changed = True
-            # REAL-WORLD FIX 2026-10-25: a Prisma project fails `npm run build`
-            # on the builder because the prisma client was never generated
-            # (no postinstall locally either if node_modules came prebuilt).
-            # Deterministic repair: ensure scripts.postinstall runs prisma
-            # generate when a schema exists and prisma is a dependency.
+            # REAL-WORLD FIX 2026-10-25, REVISED live 2026-10-24 (round-5 E2E):
+            # a Prisma project must run `prisma generate` before `next build`.
+            # The first attempt added a postinstall hook — but Liara's
+            # next-platform builder runs npm install in a two-stage flow and
+            # postinstall fired BEFORE the full sources were in place:
+            # "Error: Could not find Prisma Schema" killed the build. The build
+            # script runs with the complete tree, so ensure it there instead.
             deps_ = {**(pkg.get("dependencies") or {}), **(pkg.get("devDependencies") or {})}
             has_schema = (pathlib.Path(project_dir) / "prisma" / "schema.prisma").exists()
-            if has_schema and "prisma" in deps_:
-                pi = str(scripts.get("postinstall", "")).strip()
-                if "prisma generate" not in pi:
-                    scripts["postinstall"] = (pi + " && " if pi else "") + "prisma generate"
-                    changed = True
+            build_script = str(scripts.get("build", "")).strip()
+            if has_schema and "prisma" in deps_ and build_script and "prisma generate" not in build_script:
+                scripts["build"] = "prisma generate && " + build_script
+                changed = True
             if changed:
                 override = {"name": "package.json",
                             "content": json.dumps(pkg, ensure_ascii=False, indent=2)}
