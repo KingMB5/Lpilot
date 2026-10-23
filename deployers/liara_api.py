@@ -176,6 +176,11 @@ class LiaraApiDeployer:
         self.poll_timeout_s = max(self.poll_timeout_s, 900.0)
 
         try:
+            # LIVE FIX 2026-10-24: BYO-token sessions carry the plan in the
+            # deploy config (make_deploy_config resolves it with a verified
+            # default) — the operator env LIARA_PLAN_ID must not be required.
+            if not self.plan_id:
+                self.plan_id = str(config.get("planID") or "").strip()
             if (err := self._ensure_app(app, config)) is not None:
                 return err
             if (err := self._ensure_disks(app, config)) is not None:

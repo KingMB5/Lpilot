@@ -7,6 +7,7 @@ LiaraCliDeployer (fallback). No implementation may print or log the user's token
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import uuid
 from typing import Any, Protocol
@@ -41,11 +42,18 @@ def make_deploy_config(inspection: dict, plan: dict, approvals: dict,
     env.update(approvals.get("env_values") or {})
     env.update(plan.get("env_fixes") or {})
     start_command = plan.get("start_command") or inspection.get("start_command")
+    # LIVE FIX 2026-10-24 (E2E on lp-dcded0): BYO-token sessions have NO operator
+    # LIARA_PLAN_ID env — new-app creation then failed with missing_plan after
+    # the user had already approved. Resolve: plan's own field > user's approval
+    # choice > env > VERIFIED default plan (small-g2, live 2026-10-22/24).
+    plan_id = (str(plan.get("planID") or approvals.get("plan_id")
+                   or os.getenv("LIARA_PLAN_ID") or "small-g2").strip())
     cfg = {
         # Unique per deployment: concurrent users must never overwrite each
         # other's app on the shared Liara account (each deploy = own app+URL).
         "app_name": plan.get("app_name") or ("lp-" + uuid.uuid4().hex[:6]),
         "platform": plan.get("platform") or inspection.get("platform"),
+        "planID": plan_id,
         "port": plan.get("port"),
         "env": env,
         "required_env": list(inspection.get("env_vars_required") or []),

@@ -76,7 +76,10 @@ def main() -> int:
 
     r = c.post(f"{BASE}/api/sessions/{sid}/approve", json={
         "approved": True, "cost_ok": True,
-        "env_values": {}, "user_reply": "",
+        "env_values": {"ADMIN_PASSWORD": "S3cure-Pass-99",
+                       "DATABASE_URL": "file:./db/custom.db",
+                       "OPENAI_API_KEY": "sk-e2e-test-placeholder-key"},
+        "user_reply": "",
         "liara_token": TOKEN,
     })
     print("approve:", r.status_code, r.json())
