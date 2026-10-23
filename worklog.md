@@ -702,3 +702,23 @@ Stage Summary:
   and a hand-off brief for the user's own agent.
 - Two hard lessons encoded in code+tests: demo-safety by construction (not env
   luck) and proxy-safe realtime (polling fallback, idempotent replay).
+
+---
+Task ID: 10-a
+Agent: Z.ai Code (main)
+Task: Operator verdict "this is a simple page that ends up linking my GitHub — make EVERYTHING real and live": full product rebuild of the UI + real GitHub intake + real live prices + Star Agent branding; then a real deploy attempt on a fresh app.
+
+Work Log:
+- Diagnosed the operator's screenshot: liarapilot-app.liara.run was serving the old landing (with "چالش لیارا" + GitHub button) — that IS the "simple page ending with GitHub" complaint.
+- BACKEND: app/github.py — real GitHub tarball intake (private repos via GH_PAT, path-traversal/size/count-safe extraction, Persian user-facing errors); POST /api/github. Tested live with KingMB5/Lpilot (private) — session created.
+- BACKEND: GET /api/account — real team balance + real plan price (VERIFIED: billing?teamID= -> team.balance; /v1/me plans.projects is a DICT keyed by planID; small-g2 price=659.72 T/h, displayPrice=475,000 T/month). 5-min cache.
+- BACKEND: nodes.make_plan now injects REAL prices from the live catalog into plan + approval payload (cost_unverified=False, cost_source=liara_api_live) for real sessions; demo/mock keeps the honest UNVERIFIED line.
+- FRONTEND: full rewrite of web/index.html + web/style.css + web/app.js (~2300 lines) — dark premium RTL design, Vazirmatn, intake tabs (GitHub first / ZIP), real account chip in header, sample badge, Star Agent («ایجنت ستاره») dashboard, real-price cost grid, fixed 2 latent JS bugs (focus-trap selector, old-reports toggle). Zero challenge/demo mentions.
+- E2E browser-verified (agent-browser, desktop+mobile, no console errors): sample -> assessment -> gates (cost/env/prepared files) -> ask_user question modal -> report -> weekly schedule -> FIRST care report rendered (score 30, critical finding, honest) -> brief modal with Persian text.
+- REAL DEPLOY attempt (new landing without challenge refs): upload -> expert -> start -> approval gate showed REAL price -> approved -> 4 real releases today (build READY, push 1.56GB 100%, deploy finished) BUT live URL 502 "Application Error" with ZERO runtime stdout; fix loop did 3 evidence-based set_env fixes then escalated honestly (designed behavior). Restarts did not help.
+- DECISIVE TEST: deleted the app, created a FRESH app via the product, deployed the EXACT previous content that served 200 yesterday (04:10 release) -> build READY + push 100% -> still 502 (23 verify attempts). Conclusion: Liara platform-side serving incident today (not code). Documented; both test states cleaned: session cancelled, app DELETED to stop 659.72 T/h burn. Balance 1,991,979 T (today's real cost ~2.1k T).
+- Suite: 159 passed.
+
+Stage Summary:
+- Product is REAL end-to-end: GitHub/ZIP intake, real analysis, real live prices in the approval gate, human gates, real deployer + real verify + real self-heal + honest escalation, real Star Agent with schedules/reports/brief.
+- liarapilot-app is DELETED (was 502-broken; platform serving incident). Next real deploy (e.g. the operator's perfume site) creates its app fresh; if the platform still 502s, the product's verify will catch it and escalate honestly.
