@@ -81,6 +81,8 @@ def _zip_from_multipart(body: bytes) -> bytes:
 def test_success_flow_creates_app_disk_envs_and_uploads(tmp_path):
     get_app = respx.get(f"{BASE}/v1/projects/my-app").mock(side_effect=[
         httpx.Response(404),   # ensure_app: does not exist
+        httpx.Response(200, json={"project": {"project_id": "my-app",
+                                              "envs": [{"key": "OLD_VAR", "value": "keep-me"}]}}),
     ])
     create = respx.post(f"{BASE}/v1/projects").mock(return_value=httpx.Response(200))
     # network auto-discovery (VERIFIED live 2026-10-22: creation needs a network id)
@@ -107,7 +109,7 @@ def test_success_flow_creates_app_disk_envs_and_uploads(tmp_path):
 
     assert res["ok"] is True and res["kind"] == "success"
     assert res["url"] == "https://my-app.liara.run"
-    assert get_app.call_count == 1  # existence check only — release drives the rest
+    assert get_app.call_count == 2  # existence check + read-current-env for merge
     assert release.call_count == 1
     rel_body = json.loads(release.calls.last.request.content)
     assert rel_body["sourceID"] == "src-1" and rel_body["port"] == 3000
@@ -124,10 +126,13 @@ def test_success_flow_creates_app_disk_envs_and_uploads(tmp_path):
     assert str(build_logs.calls.last.request.url.params.get("since")) == "2026-10-22T20:00:00Z"
     # disk body: NUMBER of GB (VERIFIED live 2026-10-22 — "1G" is rejected)
     assert json.loads(disk.calls.last.request.content) == {"name": "database", "size": 1}
-    # env VALUES go to update-envs and nowhere else
+    # env VALUES go to update-envs and nowhere else; VERIFIED live 2026-10-24:
+    # update-envs REPLACES the whole env list, so the deployer merges first —
+    # existing app variables survive (config wins on conflicts).
     env_body = json.loads(envs.calls.last.request.content)
     assert env_body["project"] == "my-app"
     assert {"key": "ADMIN_PASSWORD", "value": "s3cret-value"} in env_body["variables"]
+    assert {"key": "OLD_VAR", "value": "keep-me"} in env_body["variables"]
     # upload is multipart field "file"; zip carries liara.json + sources
     req = upload.calls.last.request
     assert req.headers["authorization"] == f"Bearer {TOKEN}"

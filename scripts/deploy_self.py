@@ -41,9 +41,10 @@ def main() -> int:
         "required_env": [],
         "prepared_files": [],
         # keep the release artifact clean: runtime code + assets only
-        "drop_files": [".venv", "tests", "uv.lock", "worklog.md", "db",
+        "drop_files": [".venv", "tests", "uv.lock", "pyproject.toml", "worklog.md", "db",
                        "fixtures-local", ".pytest_cache", "__pycache__",
-                       "skills", "src", "bun.lock", "upload", "tool-results"],
+                       "skills", "src", "bun.lock", "upload", "tool-results",
+                       "data/uploads"],
         "disks": [],
         "start_command": START_COMMAND,
         "project_dir": PROJECT_DIR,

@@ -385,7 +385,28 @@ class LiaraApiDeployer:
         env = config.get("env") or {}
         if not env:
             return None
-        variables = [{"key": str(k), "value": str(v)} for k, v in sorted(env.items())]
+        # VERIFIED live 2026-10-24: update-envs REPLACES the app's whole env
+        # list (not an upsert) — sending only the new keys silently WIPED the
+        # app's existing variables (e.g. LLM config on our own app). So first
+        # read the current envs and merge: config wins on conflicts, existing
+        # keys otherwise survive. Values never appear in logs.
+        merged = {str(k): str(v) for k, v in env.items()}
+        try:
+            resp = self._request("GET", f"/v1/projects/{app}")
+            if resp.status_code == 200:
+                cur = ((resp.json() or {}).get("project") or {}).get("envs")
+                if isinstance(cur, list):
+                    for item in cur:
+                        if isinstance(item, dict) and item.get("key"):
+                            merged.setdefault(str(item["key"]),
+                                              str(item.get("value", "")))
+                    self._log(f"update-envs: {len(env)} new + "
+                              f"{len(merged) - len(env)} existing kept for {app}")
+            else:
+                self._log(f"update-envs: read current env -> http {resp.status_code} (merge skipped)")
+        except httpx.HTTPError:
+            self._log("update-envs: read current env failed (merge skipped)")
+        variables = [{"key": k, "value": v} for k, v in sorted(merged.items())]
         # VERIFIED body {project, variables:[{key,value}]} — VALUES go only here.
         self._log(f"update-envs: {len(variables)} variable(s) for {app}")
         resp = self._request("POST", "/v1/projects/update-envs",
