@@ -13,7 +13,12 @@ from typing import Any
 
 def make_deployer(session: Any = None) -> Any:
     token = getattr(session, "liara_token", None) or os.getenv("LIARA_API_TOKEN", "")
-    forced_demo = os.getenv("DEMO_MODE", "") == "1"
+    # A demo/fixture session (the UI's sample-project buttons) must NEVER touch
+    # the real Liara API even when the process env says DEPLOYER=liara_api —
+    # demo must stay offline by construction, not by env luck. (Discovery of
+    # the 2026-10-23 e2e test: serve.sh unsets DEMO_MODE, so env alone cannot
+    # be trusted to protect demo sessions.)
+    forced_demo = bool(getattr(session, "demo", False)) or os.getenv("DEMO_MODE", "") == "1"
     kind = "mock" if forced_demo else os.getenv("DEPLOYER", "mock").strip().lower()
 
     if kind == "liara_api":

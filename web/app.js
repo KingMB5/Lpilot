@@ -58,8 +58,14 @@
     planEl: null,         // plan card <li> (replaced, never duplicated)
     deployGroupEl: null,  // <ol> inside the "استقرار" group
     monitorTimer: null,   // T6 report-screen poll timer
+    careTimer: null,      // care dashboard poll timer
+    care: null,           // last care state {schedule, next_ts, running, reports, has_brief}
     es: null,             // EventSource
     sseTimer: null,
+    sseWatchdog: null,    // no-first-message watchdog -> polling fallback
+    sseGot: 0,            // messages received on current EventSource
+    pollTimer: null,      // snapshot polling fallback (proxy-safe)
+    pollBusy: false,
     sseAttempts: 0,
     cancelled: false,
     hydrating: false,
@@ -118,7 +124,11 @@
     cancel: function (id) { return req('POST', '/api/sessions/' + encodeURIComponent(id) + '/cancel'); },
     ask: function (id, body) { return req('POST', '/api/sessions/' + encodeURIComponent(id) + '/ask', body); },
     ops: function (id, body) { return req('POST', '/api/sessions/' + encodeURIComponent(id) + '/ops', body); },
-    monitor: function (id) { return req('GET', '/api/sessions/' + encodeURIComponent(id) + '/monitor'); }
+    monitor: function (id) { return req('GET', '/api/sessions/' + encodeURIComponent(id) + '/monitor'); },
+    careState: function (id) { return req('GET', '/api/sessions/' + encodeURIComponent(id) + '/care'); },
+    careSet: function (id, body) { return req('POST', '/api/sessions/' + encodeURIComponent(id) + '/care', body); },
+    careRun: function (id) { return req('POST', '/api/sessions/' + encodeURIComponent(id) + '/care/run'); },
+    careBrief: function (id) { return req('POST', '/api/sessions/' + encodeURIComponent(id) + '/care/brief', {}); }
   };
 
   /* ----------------------------------------------------------
@@ -142,6 +152,7 @@
   function showExpired() {
     if (store.screen === 'expired') return;
     stopSSE();
+    stopCarePolling();
     closeModal();
     showScreen('expired');
   }
@@ -448,11 +459,14 @@
   }
 
   /**
-   * SSE with manual reconnect: close on error, wait 2s, reopen the SAME
-   * URL (never add cache-busters — that would defeat Last-Event-ID replay
-   * semantics server-side). A freshly reopened EventSource has no
-   * Last-Event-ID, so the server may replay old messages; handleEvent()
-   * drops anything with id <= store.maxI, so nothing renders twice.
+   * SSE with manual reconnect + a POLLING FALLBACK.
+   * Discovery 2026-10-23: the Next.js dev proxy compresses (gzip) proxied
+   * responses whenever the browser sends Accept-Encoding — and the compressed
+   * SSE stream then never delivers chunks to the browser (curl without that
+   * header works fine). So: if the EventSource stays silent for 5s, we tear
+   * it down and poll the snapshot endpoint instead — handleEvent() already
+   * dedupes by integer id, so replay through polling is idempotent. On a
+   * direct deployment (liara.run, no proxy) SSE stays live.
    */
   function openSSE() {
     stopSSE();
@@ -460,10 +474,21 @@
     var es = new EventSource('/api/events/' + encodeURIComponent(store.sessionId));
     store.es = es;
     store.sseAttempts = 0;
+    store.sseGot = 0;
+    if (store.sseWatchdog) clearTimeout(store.sseWatchdog);
+    store.sseWatchdog = setTimeout(function () {
+      if (store.sseGot === 0 && store.es === es) {
+        try { es.close(); } catch (e) { /* noop */ }
+        store.es = null;
+        startPolling(); // proxy ate the stream -> poll snapshots
+      }
+    }, 5000);
 
     es.onopen = function () { store.sseAttempts = 0; };
 
     es.onmessage = function (ev) {
+      store.sseGot += 1;
+      stopPolling(); // SSE proved alive again — polling not needed
       var msg = null;
       try { msg = JSON.parse(ev.data); } catch (e) { return; }
       if (!msg || typeof msg !== 'object' || !msg.type) return;
@@ -482,12 +507,52 @@
     };
   }
 
+  /** Snapshot polling fallback: same event routing as hydration replay. */
+  function startPolling() {
+    if (store.pollTimer) return;
+    store.pollTimer = setInterval(pollOnce, 1500);
+    pollOnce();
+  }
+
+  function stopPolling() {
+    if (store.pollTimer) { clearInterval(store.pollTimer); store.pollTimer = null; }
+    store.pollBusy = false;
+  }
+
+  function pollOnce() {
+    if (!store.sessionId || store.pollBusy || store.screen === 'expired') return;
+    if (store.screen === 'report') return; // report screen polls /monitor + /care
+    store.pollBusy = true;
+    api.snapshot(store.sessionId).then(function (snap) {
+      store.pollBusy = false;
+      if (!snap || store.screen === 'report' || store.screen === 'expired') return;
+      var evs = Array.isArray(snap.events) ? snap.events : [];
+      evs.forEach(function (ev) {
+        if (ev && ev.type) handleEvent(ev.i, ev.type, ev.payload || {});
+      });
+      if (snap.plan && !store.hasPlan) handleEvent(null, 'plan', snap.plan);
+      if (snap.report && !store.report) store.report = snap.report;
+      if (snap.approval && !store.pendingApproval) openApprovalModal(snap.approval);
+      var st = String(snap.status || '').toLowerCase();
+      if (/cancel/.test(st) && !store.cancelled) {
+        store.cancelled = true;
+        addNote('لغو شد');
+        disableInputs(true);
+      }
+      if (store.report && /done|success|finish|complete/.test(st) && store.screen === 'run') goReport();
+    }).catch(function () {
+      store.pollBusy = false;
+    });
+  }
+
   function stopSSE() {
     if (store.sseTimer) { clearTimeout(store.sseTimer); store.sseTimer = null; }
+    if (store.sseWatchdog) { clearTimeout(store.sseWatchdog); store.sseWatchdog = null; }
     if (store.es) {
       try { store.es.close(); } catch (e) { /* noop */ }
       store.es = null;
     }
+    stopPolling();
   }
 
   /** Central event gate: dedupes by integer id, then routes by type. */
@@ -802,6 +867,16 @@
     scrollTimeline();
   }
 
+  function rCareScheduleNote(p) {
+    var fa = { daily: 'هر روز', weekly: 'هر هفته', monthly: 'هر ماه' }[p.schedule || ''] || '';
+    addNote(fa ? ('نگهبان پروژه فعال شد — پایش ' + fa + '. اولین بررسی همین حالا انجام می‌شود.') : 'پایش دوره‌ای نگهبان خاموش شد.');
+  }
+
+  function rCareReportNote(p) {
+    var score = (p.score != null) ? faDigits(p.score) : '؟';
+    addNote('نگهبان گزارش داد: نمرهٔ سلامت ' + score + ' از ۱۰۰ — ' + (p.verdict_fa || ''));
+  }
+
   function rVerify(p) {
     setStep(6); // stepper: صحت‌سنجی
     var ok = !!p.ok;
@@ -876,7 +951,9 @@
     level_changed: rLevelChanged,
     ops: rOps,
     ops_denied: rOpsDenied,
-    monitor_alert: rMonitorAlert
+    monitor_alert: rMonitorAlert,
+    care_schedule: rCareScheduleNote,
+    care_report: rCareReportNote
   };
 
   /* ----------------------------------------------------------
@@ -1300,7 +1377,10 @@
     disableInputs(true);
     showScreen('report');
     renderReport();
-    if (store.report && (store.report.url || store.report.live_url)) startMonitorPolling();
+    if (store.report && (store.report.url || store.report.live_url)) {
+      startMonitorPolling();
+      startCarePolling(); // نگهبان پروژه: وضعیت و گزارش‌های زنده
+    }
   }
 
   /* ----------------------------------------------------------
@@ -1371,6 +1451,318 @@
   function stopMonitorPolling() {
     if (store.monitorTimer) { clearInterval(store.monitorTimer); store.monitorTimer = null; }
   }
+
+  /* ----------------------------------------------------------
+   * Care Agent dashboard (نگهبان پروژه) — scheduled guardian.
+   * Polls GET /care every 10s while on the report screen, lets the
+   * user pick daily/weekly/monthly monitoring, shows the care reports
+   * (score, findings with severity, actionable tips) and produces the
+   * copyable "brief" the user can hand to their own agent.
+   * ---------------------------------------------------------- */
+
+  var CARE_FA = { daily: 'هر روز', weekly: 'هر هفته', monthly: 'هر ماه', off: 'خاموش', '': 'خاموش' };
+
+  function startCarePolling() {
+    if (store.careTimer) return;
+    loadCare(); // immediate first paint
+    store.careTimer = setInterval(loadCare, 10000);
+  }
+
+  function stopCarePolling() {
+    if (store.careTimer) { clearInterval(store.careTimer); store.careTimer = null; }
+  }
+
+  function loadCare() {
+    if (!store.sessionId || store.screen !== 'report') return;
+    api.careState(store.sessionId).then(function (data) {
+      store.care = data || {};
+      renderCare();
+    }).catch(function (e) {
+      if (isExpired(e)) stopCarePolling();
+    });
+  }
+
+  function careScoreBadge(score) {
+    var n = Number(score);
+    if (!Number.isFinite(n)) return el('span', 'badge badge-zinc', '—');
+    var cls = n >= 80 ? 'badge-emerald' : (n >= 60 ? 'badge-amber' : 'badge-red');
+    var b = el('span', 'badge ' + cls, 'نمرهٔ سلامت: ' + faDigits(n) + ' از ۱۰۰');
+    return b;
+  }
+
+  var FINDING_SEV = {
+    critical: { label: 'بحرانی', cls: 'badge-red', dot: 'dot-red' },
+    warning:  { label: 'هشدار',  cls: 'badge-amber', dot: 'dot-amber' },
+    info:     { label: 'نکته',   cls: 'badge-zinc', dot: '' }
+  };
+
+  function careTriggerLabel(t) {
+    if (t === 'first') return 'اولین بررسی';
+    if (t === 'scheduled') return 'پایش دوره‌ای';
+    if (t === 'manual') return 'بررسی فوری';
+    return 'بررسی';
+  }
+
+  function faClock(tsSeconds) {
+    try {
+      return new Date(tsSeconds * 1000).toLocaleString('fa-IR',
+        { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+    } catch (e) { return ''; }
+  }
+
+  function faDuration(seconds) {
+    var s = Math.max(0, Math.round(seconds));
+    if (s < 90) return faDigits(s) + ' ثانیه بعد';
+    var m = Math.round(s / 60);
+    if (m < 90) return faDigits(m) + ' دقیقه بعد';
+    var h = Math.round(m / 60);
+    if (h < 36) return faDigits(h) + ' ساعت بعد';
+    var d = Math.round(h / 24);
+    return faDigits(d) + ' روز بعد';
+  }
+
+  function careReportCard(rec, idx, total) {
+    var li = el('li', 'care-report' + (idx === 0 ? ' care-report-new' : ''));
+    if (idx > 2) li.hidden = true; // older ones behind «بقیهٔ گزارش‌ها»
+
+    var head = el('div', 'care-report-head');
+    head.appendChild(careScoreBadge(rec.score));
+    head.appendChild(el('span', 'badge badge-zinc', careTriggerLabel(rec.trigger)));
+    if (rec.ts) head.appendChild(el('span', 'muted small', faClock(rec.ts)));
+    li.appendChild(head);
+
+    if (rec.health) {
+      var hrow = el('div', 'care-health-row');
+      var ok = rec.health.ok;
+      hrow.appendChild(el('span', 'badge ' + (ok ? 'badge-emerald' : 'badge-red'), ok ? 'HTTP سالم' : 'پاسخ سالم نداد'));
+      if (rec.health.avg_ms != null) {
+        hrow.appendChild(el('span', 'muted small', 'میانگین زمان پاسخ: ' + faDigits(rec.health.avg_ms) + ' میلی‌ثانیه'));
+      }
+      if (rec.health.worst_ms != null && rec.health.n > 1) {
+        hrow.appendChild(el('span', 'muted small', 'کندترین: ' + faDigits(rec.health.worst_ms)));
+      }
+      li.appendChild(hrow);
+    }
+
+    if (rec.verdict_fa) li.appendChild(el('p', 'care-verdict', esc(rec.verdict_fa)));
+
+    if (Array.isArray(rec.findings) && rec.findings.length) {
+      var ul = el('ul', 'care-findings');
+      rec.findings.forEach(function (f) {
+        var sev = FINDING_SEV[f.severity] || FINDING_SEV.info;
+        var item = el('li', 'care-finding');
+        var headF = el('div', 'care-finding-head');
+        headF.appendChild(el('span', 'badge ' + sev.cls, sev.label));
+        headF.appendChild(el('span', 'care-finding-title', esc(f.title_fa || '')));
+        item.appendChild(headF);
+        if (f.detail_fa) item.appendChild(el('p', 'care-finding-detail', esc(f.detail_fa)));
+        if (f.evidence) item.appendChild(el('span', 'care-finding-evidence ltr-block', esc(f.evidence)));
+        ul.appendChild(item);
+      });
+      li.appendChild(ul);
+    }
+
+    if (Array.isArray(rec.tips_fa) && rec.tips_fa.length) {
+      var tips = el('ul', 'checklist care-tips');
+      rec.tips_fa.forEach(function (t) { tips.appendChild(el('li', '', esc(t))); });
+      li.appendChild(tips);
+    }
+    return li;
+  }
+
+  function careSection() {
+    var sec = el('section', 'card report-sec care-card');
+    sec.id = 'care-box';
+    return sec;
+  }
+
+  function renderCare() {
+    var box = $('#care-box');
+    if (!box) return;
+    var c = store.care || {};
+    var reports = Array.isArray(c.reports) ? c.reports.slice().reverse() : []; // newest first
+    box.innerHTML = '';
+
+    // ---- header
+    var head = el('div', 'care-head');
+    var icon = el('span', 'care-icon', '🛡️');
+    icon.setAttribute('aria-hidden', 'true');
+    head.appendChild(icon);
+    var titles = el('div', 'care-head-titles');
+    titles.appendChild(el('h4', 'sec-title care-title', 'نگهبان پروژه'));
+    titles.appendChild(el('p', 'muted small',
+      'مثل یک مشاور بهینه‌سازی، دوره‌ای سایتت را چک می‌کنم — سلامت، سرعت و لاگ‌ها. اگر چیزی افت کند، می‌گویم چرا و چطور درستش کنی.'));
+    head.appendChild(titles);
+    if (c.schedule && c.schedule !== 'off') {
+      head.appendChild(el('span', 'badge badge-emerald', 'فعال: ' + (CARE_FA[c.schedule] || c.schedule)));
+    } else {
+      head.appendChild(el('span', 'badge badge-zinc', 'غیرفعال'));
+    }
+    box.appendChild(head);
+
+    // ---- schedule picker
+    var pick = el('div', 'care-pick');
+    pick.setAttribute('role', 'group');
+    pick.setAttribute('aria-label', 'زمان‌بندی پایش');
+    pick.appendChild(el('span', 'sec-inline-label', 'هر چند وقت یک بار چک کنم؟'));
+    var chips = el('div', 'chip-wrap care-chips');
+    ['daily', 'weekly', 'monthly'].forEach(function (v) {
+      var active = c.schedule === v;
+      var b = el('button', 'chip care-chip' + (active ? ' care-chip-on' : ''), CARE_FA[v]);
+      b.type = 'button';
+      b.setAttribute('aria-pressed', String(active));
+      b.addEventListener('click', function () { setCareSchedule(v, b); });
+      chips.appendChild(b);
+    });
+    var offBtn = el('button', 'chip care-chip care-chip-off' + (!c.schedule ? ' care-chip-on' : ''), 'خاموش');
+    offBtn.type = 'button';
+    offBtn.setAttribute('aria-pressed', String(!c.schedule));
+    offBtn.addEventListener('click', function () { setCareSchedule('off', offBtn); });
+    chips.appendChild(offBtn);
+    pick.appendChild(chips);
+    box.appendChild(pick);
+
+    // ---- status row + actions
+    var row = el('div', 'care-actions');
+    if (c.running) {
+      var st = el('span', 'badge badge-amber care-status');
+      st.innerHTML = '<span class="spinner spinner-sm" aria-hidden="true"></span> در حال بررسی سایت…';
+      row.appendChild(st);
+    } else if (c.schedule && c.next_ts) {
+      row.appendChild(el('span', 'care-status muted small',
+        'پایش بعدی: ' + faDuration(c.next_ts - Date.now() / 1000)));
+    }
+    var btnRun = el('button', 'btn btn-ghost btn-sm ops-btn', 'پایش فوری');
+    btnRun.type = 'button';
+    btnRun.disabled = !!c.running;
+    btnRun.addEventListener('click', function () {
+      btnRun.disabled = true;
+      btnRun.textContent = 'در حال شروع…';
+      api.careRun(store.sessionId).then(function () {
+        c.running = true;
+        renderCare();
+      }).catch(function (e) {
+        if (!isExpired(e)) addNote('پایش فوری شروع نشد؛ دوباره تلاش کن.');
+        renderCare();
+      });
+    });
+    row.appendChild(btnRun);
+
+    var btnBrief = el('button', 'btn btn-ghost btn-sm ops-btn', 'خلاصه برای ایجنت من');
+    btnBrief.type = 'button';
+    btnBrief.addEventListener('click', openBriefModal);
+    row.appendChild(btnBrief);
+    box.appendChild(row);
+
+    // ---- reports
+    var listWrap = el('div', 'care-list-wrap');
+    if (!reports.length) {
+      listWrap.appendChild(el('p', 'muted small', 'هنوز گزارشی نیست. یک زمان‌بندی انتخاب کن یا «پایش فوری» را بزن — اولین گزارش چند ثانیه بعد می‌آید.'));
+    } else {
+      listWrap.appendChild(el('span', 'sec-inline-label', 'گزارش‌های مراقبت'));
+      var ul = el('ul', 'care-reports');
+      reports.forEach(function (r, i) { ul.appendChild(careReportCard(r, i, reports.length)); });
+      listWrap.appendChild(ul);
+      if (reports.length > 3) {
+        var more = el('button', 'btn btn-ghost btn-sm', 'نمایش ' + faDigits(reports.length - 3) + ' گزارش قدیمی‌تر');
+        more.type = 'button';
+        more.addEventListener('click', function () {
+          var hidden = ul.querySelectorAll('li[hidden]');
+          var show = hidden.length > 0;
+          var items = ul.children;
+          for (var i = 0; i < items.length; i++) { items[i].hidden = show ? false : (i > 2); }
+          more.textContent = show ? 'نمایش گزارش‌های قدیمی‌تر' : 'نمایش ' + faDigits(reports.length - 3) + ' گزارش قدیمی‌تر';
+        });
+        listWrap.appendChild(more);
+      }
+    }
+    box.appendChild(listWrap);
+  }
+
+  function setCareSchedule(v, btn) {
+    var box = $('#care-box');
+    var chips = box ? box.querySelectorAll('.care-chip') : [];
+    for (var i = 0; i < chips.length; i++) { chips[i].disabled = true; chips[i].classList.remove('care-chip-on'); }
+    if (btn) btn.classList.add('care-chip-on');
+    api.careSet(store.sessionId, { schedule: v }).then(function () {
+      // 202 accepted; the first check starts server-side. Optimistic state:
+      store.care = store.care || {};
+      store.care.schedule = (v === 'off') ? '' : v;
+      if (v !== 'off') store.care.running = true; // first check fires immediately
+      renderCare();
+    }).catch(function (e) {
+      if (!isExpired(e)) addNote('تغییر زمان‌بندی اعمال نشد؛ دوباره تلاش کن.');
+      for (var j = 0; j < chips.length; j++) chips[j].disabled = false;
+      loadCare();
+    });
+  }
+
+  /** The copyable brief the user hands to their own agent (T-care). */
+  function openBriefModal() {
+    var modal = $('#modal');
+    modal.innerHTML = '';
+    modal.classList.remove('is-approval', 'is-question', 'is-ops');
+    modal.classList.add('is-ops');
+    var title = el('h3', 'modal-title', 'خلاصهٔ مراقبت برای ایجنت تو');
+    title.id = 'modal-title';
+    modal.appendChild(title);
+    modal.appendChild(el('p', 'muted modal-sub',
+      'این متن را کپی کن و به هر ایجنتی که داری بده (چت‌بات، ابزار کدنویسی…) — می‌داند نگهبان این سایت چیست و هر دوره چه چیزهایی را چک کند.'));
+    var pre = el('textarea', 'brief-text ltr-none');
+    pre.id = 'brief-text';
+    pre.readOnly = true;
+    pre.rows = 12;
+    pre.dir = 'rtl';
+    pre.textContent = 'در حال ساخت خلاصه…';
+    modal.appendChild(pre);
+
+    var errBox = el('div', 'error-box');
+    errBox.hidden = true;
+    errBox.setAttribute('role', 'alert');
+    modal.appendChild(errBox);
+
+    var actions = el('div', 'modal-actions');
+    var copyBtn = el('button', 'btn btn-primary', 'کپی متن');
+    copyBtn.type = 'button';
+    var closeBtn = el('button', 'btn btn-ghost', 'بستن');
+    closeBtn.type = 'button';
+    actions.appendChild(copyBtn);
+    actions.appendChild(closeBtn);
+    modal.appendChild(actions);
+
+    copyBtn.addEventListener('click', function () {
+      var text = pre.value;
+      var done = function () {
+        copyBtn.textContent = 'کپی شد ✓';
+        setTimeout(function () { copyBtn.textContent = 'کپی متن'; }, 1800);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(done).catch(function () { copyFallback(pre, done); });
+      } else {
+        copyFallback(pre, done);
+      }
+    });
+    closeBtn.addEventListener('click', closeModal);
+    $('#modal-overlay').hidden = false;
+    copyBtn.focus();
+
+    api.careBrief(store.sessionId).then(function (res) {
+      pre.value = (res && res.brief) || 'خلاصه‌ای ساخته نشد — دوباره تلاش کن.';
+    }).catch(function (e) {
+      pre.value = '';
+      errBox.hidden = false;
+      errBox.textContent = isExpired(e) ? '' : 'ساخت خلاصه ناموفق بود؛ دوباره تلاش کن.';
+    });
+  }
+
+  function copyFallback(textarea, done) {
+    try {
+      textarea.select();
+      document.execCommand('copy');
+      done();
+    } catch (e) { /* best-effort */ }
+  }
+
 
   function reportStatus(r) {
     if (store.cancelled) return { label: 'لغو شد', cls: 'st-off' };
@@ -1513,6 +1905,10 @@
 
       // Post-deploy operations (T4): each action shows its risk tier.
       root.appendChild(opsSection());
+
+      // Care Agent dashboard (نگهبان پروژه) — scheduled guardian + reports.
+      root.appendChild(careSection());
+      renderCare(); // initial paint (poll keeps it fresh)
     }
 
     // Steps taken

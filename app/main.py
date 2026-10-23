@@ -10,6 +10,7 @@ import json
 import os
 import shutil
 import tempfile
+import threading
 import time
 import zipfile
 import pathlib
@@ -35,7 +36,16 @@ FIXTURES = {
     "broken-project": ROOT / "fixtures" / "broken-project",
 }
 
-app = FastAPI(title="LiaraPilot", docs_url=None, redoc_url=None)
+def _lifespan(app: FastAPI):
+    """نگهبان پروژه: ترد سراسری زمان‌بندی پایش دوره‌ای (T-care)."""
+    from app.care import start_scheduler
+
+    start_scheduler(STORE)
+    yield
+
+
+app = FastAPI(title="LiaraPilot", docs_url=None, redoc_url=None,
+              lifespan=_lifespan)
 
 
 @app.middleware("http")
@@ -324,6 +334,72 @@ def ops(sid: str, body: dict):
                         "ok": bool(result.get("ok")),
                         "message_fa": result.get("message", "")})
     return safe
+
+
+# ---------------------------------------------------------------- care agent (T-care)
+
+@app.get("/api/care/schedules")
+def care_schedules():
+    """گزینه‌های زمان‌بندی برای UI — یک منبع حقیقت در سرور."""
+    from app.care import SCHEDULE_LABELS
+
+    return {"schedules": SCHEDULE_LABELS}
+
+
+@app.get("/api/sessions/{sid}/care")
+def care_state(sid: str):
+    """وضعیت نگهبان + تاریخچهٔ گزارش‌های مراقبت (جدیدترین آخر)."""
+    s = _get_session(sid)
+    return s.care_summary()
+
+
+@app.post("/api/sessions/{sid}/care")
+def care_schedule(sid: str, body: dict):
+    """فعال/غیرفعال‌سازی پایش دوره‌ای (daily|weekly|monthly|off).
+    فعال‌سازی فوراً یک پایش اجرا می‌کند (trigger=first) — read-only، سطح ۱."""
+    s = _get_session(sid)
+    schedule = str(body.get("schedule", "")).strip().lower()
+    from app.care import set_schedule
+
+    res = set_schedule(s, schedule)
+    if not res.get("ok"):
+        raise HTTPException(status_code=400, detail=res.get("message_fa", "bad schedule"))
+    return JSONResponse(res, status_code=202)
+
+
+@app.post("/api/sessions/{sid}/care/run")
+def care_run(sid: str):
+    """پایش فوری دستی (در ترد پس‌زمینه؛ نتیجه از way of GET /care یا SSE می‌آید)."""
+    s = _get_session(sid)
+    if not (s.report or {}).get("url"):
+        raise HTTPException(status_code=409, detail="no deployed url yet")
+    if s.care_running:
+        return JSONResponse({"ok": True, "already_running": True}, status_code=202)
+    from app.care import run_care_check
+
+    threading.Thread(target=_care_run_bg, args=(s,), daemon=True,
+                     name=f"care-manual-{s.id}").start()
+    return JSONResponse({"ok": True}, status_code=202)
+
+
+def _care_run_bg(session) -> None:
+    from app.care import run_care_check
+
+    try:
+        run_care_check(session, trigger="manual")
+    except Exception:  # noqa: BLE001 — پایش هرگز سرور را نمی‌اندازد
+        pass
+
+
+@app.post("/api/sessions/{sid}/care/brief")
+def care_brief(sid: str):
+    """بریف نگهداری برای ایجنت خودِ کاربر (یک call LLM، کش‌شده در جلسه)."""
+    s = _get_session(sid)
+    from app.care import build_agent_brief
+
+    with s.ask_lock:  # serialize LLM usage like /ask
+        text = build_agent_brief(s)
+    return {"brief": text}
 
 
 # ---------------------------------------------------------------- SSE

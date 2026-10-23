@@ -44,6 +44,13 @@ class Session:
     monitor_history: list = field(default_factory=list)
     monitor_alerting: bool = False
     monitor_thread: Any = None
+    # care agent (T-care) — نگهبان پروژه: scheduled guardian state, RAM only
+    care_schedule: str = ""            # "" | daily | weekly | monthly
+    care_next_ts: float = 0.0          # epoch of the next scheduled check
+    care_reports: list = field(default_factory=list)   # newest appended, max 20
+    care_running: bool = False
+    care_brief: str = ""               # cached agent brief (user copyable)
+    care_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     _seq: int = 0
     _cond: threading.Condition = field(default_factory=threading.Condition, repr=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
@@ -95,6 +102,17 @@ class Session:
                 "deployer": getattr(self.deployer, "name", None),
                 "llm_name": self.llm_name,
                 "error": self.error,
+                "care": self.care_summary(),
+            }
+
+    def care_summary(self) -> dict:
+        with self._cond:
+            return {
+                "schedule": self.care_schedule,
+                "next_ts": self.care_next_ts,
+                "running": self.care_running,
+                "reports": list(self.care_reports),
+                "has_brief": bool(self.care_brief),
             }
 
 
