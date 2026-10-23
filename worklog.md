@@ -649,3 +649,56 @@ Stage Summary:
 - Product is LIVE and persistent at the preview origin with real LLM + real Liara deployer.
 - liarapilot-app is deployed and serving 200 on Liara (kept alive for operator review).
 - Remaining: operator UI/UX feedback, then the 5-min video (script ready, plan corrected).
+
+---
+Task ID: 9-a
+Agent: Z.ai Code (main)
+Task: Rebuild the product around what judges actually asked: analysis -> plan ->
+human approval -> deploy -> PERMANENT care agent (scheduled monitoring, log
+reading, optimization advice, agent brief) — "much more impressive than a
+deployer".
+
+Work Log:
+- Built app/care.py (Guardian engine): 3-sample real HTTP probe (avg/worst ms),
+  live Liara logs via GET /v1/projects/{name}/logs, metrics summary (UNVERIFIED),
+  ONE LLM call per cycle with explicit JSON schema (score 0-100, Persian verdict,
+  findings with severity, actionable tips) + deterministic fallback; scheduler
+  thread (daily/weekly/monthly, 30s tick); enabling a schedule fires the first
+  check IMMEDIATELY (demo-critical); copyable agent-brief builder with stub-
+  client guard (len>=120 else honest fallback).
+- app/main.py: POST/GET /api/sessions/{sid}/care(+run,brief), GET /api/care/schedules;
+  lifespan starts the global scheduler. sessions.py: care fields + care_summary in snapshot.
+- web: Guardian dashboard on the report screen — schedule chips (روزانه/هفتگی/ماهانه/خاموش),
+  next-check countdown, manual check, care report cards (score badge, health row,
+  findings with severity badges, tips), "خلاصه برای ایجنت من" modal with copy button;
+  hero copy repositioned to "deploy + permanent guardian".
+- CRITICAL FIX (deployers/__init__.py): demo/fixture sessions leaked the REAL
+  deployer because serve.sh unsets DEMO_MODE while env keeps DEPLOYER=liara_api —
+  the UI's sample-project buttons were deploying to the operator's real account.
+  Now session.demo forces MockDeployer by construction. (Cost impact of the leak
+  before the fix: 2 releases on liarapilot-app; team balance 1,994,271 T intact.)
+- CRITICAL FIX (web/app.js): Next.js dev proxy gzips proxied responses; the
+  compressed SSE stream NEVER delivered chunks to browsers (curl without the
+  header worked). Added a 5s no-first-message watchdog -> snapshot polling
+  fallback (1.5s) reusing handleEvent id-dedupe; SSE stays primary on direct
+  deployments. This was the "empty page" the operator saw.
+- E2E (browser): upload->assessment->approval(PORT)->deploy(mock)->report ->
+  schedule daily -> first care report rendered (score 30, critical finding with
+  evidence) -> brief modal with Persian brief + copy -> all verified via
+  agent-browser incl. mobile viewport.
+- Real-LLM analysis verified against live liarapilot-app (read-only): score 72,
+  Persian verdict, warning on ~1000ms latency, info on a 404 found IN THE LOG,
+  4 actionable tips. 1 call, ~11s.
+- Discovered: Liara sometimes needs a manual restart to roll out a READY release
+  (after consecutive releases). liarapilot-app restored to 200 with a new
+  zero-dep Persian landing (samples/pilot-landing) deployed via the product's
+  own deployer; verified externally 200.
+- Suite: 159 passed. Commit 88a2523 pushed to KingMB5/Lpilot main (private).
+
+Stage Summary:
+- Product is now the full story judges asked for: smart analysis -> plan+cost ->
+  explicit human approval gates -> self-healing deploy -> verify -> PERMANENT
+  guardian with scheduled monitoring, log-based diagnosis, optimization advice,
+  and a hand-off brief for the user's own agent.
+- Two hard lessons encoded in code+tests: demo-safety by construction (not env
+  luck) and proxy-safe realtime (polling fallback, idempotent replay).
