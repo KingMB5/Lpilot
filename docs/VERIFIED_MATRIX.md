@@ -164,3 +164,21 @@ OUTSIDE CHECK: curl https://liarapilot-app.liara.run → 200 "never happens in m
 ```
 
 Test apps deleted afterwards (liarapilot-app, liarapilot-agent — projects: []).
+
+## Live product run — 2026-10-23 (real LLM + real Liara, operator-driven)
+
+Two consecutive live sessions through the preview proxy (:3000 → FastAPI), FakeLLM OFF,
+MockDeployer OFF, gpt-5.4-mini via BoxAPI, team token in RAM only.
+
+| # | step | evidence |
+|---|------|----------|
+| 1 | planID=ir-small rejected | real create → http 400 `g1_plan_unavailable` — despite being in the API's own validation list; the agent read the build/create log, diagnosed the plan family issue in Persian and escalated honestly (no fake retry) |
+| 2 | planID=small-g2 accepted | create http 200 → app `liarapilot-app`, network `liarapilot-net` auto-discovered |
+| 3 | real build ×2 | node22 platform image, npm install 68 pkgs (Liara mirror), tz Asia/Tehran, `Successfully built` + `Pushing… 100% (1.56GB)` — twice (initial + self-heal redeploy) |
+| 4 | self-heal on real evidence | verify caught missing start file → `deterministic evidence overrides model guess` → fix `change_start_command` → redeploy → verify PASS |
+| 5 | verified from outside | `curl https://liarapilot-app.liara.run` → **HTTP 200 in 0.87s** |
+| 6 | report | status `deployed`, fix_history=1, R6_missing_env_vars disclosed to the user |
+| 7 | secret hygiene | full session JSON + service log scanned: zero occurrences of JWT / BoxAPI key / PAT — redaction held |
+| 8 | real cost | two full builds + ~minutes of small-g2 runtime = **235.8 Toman** (billing delta 1,995,652.6 → 1,995,416.8) |
+
+Note: `g1_plan_unavailable` recorded in config/defaults.yaml; demo script switched to `small-g2`.

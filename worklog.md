@@ -619,3 +619,33 @@ Stage Summary:
 - Credit protection plan: no Liara app creation this session; single product-driven deploy only
   during video recording (ir-small ~1,319 Toman/h), app deleted right after.
 - Remaining deliverable: the 5-min video (docs/DEMO_SCRIPT.md ready; offline rehearsal PASS).
+
+---
+Task ID: 8-a
+Agent: Z.ai Code (main)
+Task: Bring the product LIVE for operator UI/UX review + real Liara deploy on demand
+
+Work Log:
+- Operator directive: bring it up NOW (no more economy-first); product must be usable
+  for UI/UX judging and for deploying the operator's personal projects.
+- Persistence solved: sandbox kills tool-spawned processes between calls; boot children
+  survive. Built src/instrumentation.ts -> spawns scripts/serve.sh (watchdog loop) as a
+  DETACHED child of the always-on Next dev server -> uvicorn :8787 now survives.
+- Preview wiring: next.config.ts beforeFiles rewrites proxy /, /style.css, /app.js,
+  /api/* -> 127.0.0.1:8787. The Persian RTL UI + relative API + SSE all work on :3000.
+- Env trap fixed: Next auto-loads .env and leaked DEMO_MODE=1/DEPLOYER=mock into the
+  child; serve.sh now unsets DEMO_MODE and forces DEPLOYER=liara_api; .env aligned.
+- LIVE RUN 1 (ir-small): real create -> 400 g1_plan_unavailable; agent read the real
+  log, diagnosed in Persian, escalated honestly. Plan family g1 not provisionable.
+- LIVE RUN 2 (small-g2): FULL REAL GOLDEN PATH — create 200, sources upload, release,
+  REAL build (node22, npm 68 pkgs, push 1.56GB 100%), verify caught missing start file,
+  self-heal change_start_command, second real build+push, verify PASS, report deployed,
+  teach_summary. External check: https://liarapilot-app.liara.run -> HTTP 200 (0.87s).
+- Security: session JSON + service log scanned -> zero secret occurrences; 17 security/
+  risk tests green. Docs updated (DEMO_SCRIPT plan, defaults.yaml new VERIFIED fact,
+  VERIFIED_MATRIX live-run section). Real cost today: 235.8 Toman total.
+
+Stage Summary:
+- Product is LIVE and persistent at the preview origin with real LLM + real Liara deployer.
+- liarapilot-app is deployed and serving 200 on Liara (kept alive for operator review).
+- Remaining: operator UI/UX feedback, then the 5-min video (script ready, plan corrected).

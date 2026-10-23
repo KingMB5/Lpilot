@@ -91,6 +91,15 @@ verified_facts:
   status: VERIFIED
   source: real HTTP call POST /v1/projects with invalid planID -> 400 listing, 2026-10-22
   checked: '2026-10-22'
+- id: ir_small_rejected_g1_plan_unavailable
+  fact: 'POST /v1/projects with planID=ir-small (node platform, bundle=basic) returns 400
+    {"message":"g1_plan_unavailable"} even though ir-small appears in the API''s own validation
+    list — the g1 family is not provisionable for this account/platform combo. VERIFIED WORKING
+    plan for node apps: small-g2 (~660 Toman/h) — real create+build+deploy+verify 2026-10-23'
+  status: VERIFIED
+  source: 'real HTTP 400 on create (live session event i=17) + real 200 create+deploy with
+    planID=small-g2 (live session, url 200 from outside), 2026-10-23'
+  checked: '2026-10-23'
 - id: create_app_402_zero_balance
   fact: POST /v1/projects on a zero-balance account returns 402 {"message":"Not enough balance."}; downstream
     steps fail with project_not_found until credit exists
