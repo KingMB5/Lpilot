@@ -113,4 +113,20 @@ def make_deploy_config(inspection: dict, plan: dict, approvals: dict,
                 cfg["prepared_files"].append(override)
     except (OSError, ValueError):
         pass  # unreadable/unparsable package.json — deploy the plan as-is
+    # LIVE 2026-10-24 (round-12 E2E): Liara's next-platform RUNNER image runs
+    # an unconditional `COPY app/public /app/public` — a project without a
+    # public/ directory dies AFTER a perfectly green build ("COPY failed: stat
+    # app/public: file does not exist"), silently wasting the whole build.
+    # Deterministic prevention: ship a marker file so the dir always exists.
+    try:
+        if str(cfg["platform"]).lower() == "next" and project_dir:
+            has_public = any(p.is_dir() and p.name == "public"
+                             for p in pathlib.Path(project_dir).iterdir())
+            has_public = has_public or any(
+                str(f.get("name", "")).startswith("public/")
+                for f in cfg["prepared_files"])
+            if not has_public:
+                cfg["prepared_files"].append({"name": "public/.gitkeep", "content": ""})
+    except OSError:
+        pass
     return cfg
